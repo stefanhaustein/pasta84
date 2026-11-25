@@ -1,0 +1,7 @@
+\ sysutils_p.ir4 - PASTA/84 SysUtils timing and string helpers
+
+require "system.ir4"
+
+fn pas_getmscount ( -> :i )
+  sysmillis i32>i
+end

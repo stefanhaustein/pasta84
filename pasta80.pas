@@ -4,10 +4,15 @@
 
 program Pasta;
 
+{$ifndef SYS_IR4}
 {$mode delphi}
 
 uses
-  {$ifdef darwin} BaseUnix, {$endif} SysUtils, Keyboard, Dos, Math, Process;
+  {$ifdef darwin} BaseUnix, {$endif} SysUtils, Dos, Math, Process;
+{$else}
+{$i dos.pas}
+{$i sysutils.pas}
+{$endif}
 
 const
   Version = '1.00';
@@ -44,7 +49,9 @@ function LowerStr(S: String): String;
 var
   I: Integer;
 begin
-  for I := 1 to Length(S) do S[I] := LowerCase(S[I]);
+  for I := 1 to Length(S) do
+    if (S[I] >= 'A') and (S[I] <= 'Z') then
+      S[I] := Chr(Ord(S[I]) + 32);
   LowerStr := S;
 end;
 
@@ -75,17 +82,20 @@ end;
  * Converts the given integer to a hex number of the given length.
  *)
 function IntToHex(Value, Digits: Integer): String;
-const
-  Hex = '0123456789ABCDEF';
 var
   S: String;
+  D: Integer;
 begin
   S := '';
 
   while (Value <> 0) or (Digits > 0) do
   begin
-    S := Hex[1 + Value mod 16] + S;
-    Value := Value div 16;
+    D := Value and 15;
+    if D < 10 then
+      S := Chr(Ord('0') + D) + S
+    else
+      S := Chr(Ord('A') - 10 + D) + S;
+    Value := Value shr 4;
     Digits := Digits - 1;
   end;
 
@@ -157,61 +167,6 @@ begin
 end;
 
 (**
- * Encodes the given floating-point number (enclosed in a string) the way
- * the Real type needs it.
- *)
-function EncodeReal(S: String): String;
-var
-  Number, Mantissa: Extended;
-  Sign: Boolean;
-  Exponent, I: Integer;
-  Bytes: array[0..5] of Byte;
-begin
-  Val(S, Number);
-  Sign := False;
-  Mantissa := 0;
-  Exponent := 0;
-
-  if Number = 0 then
-  begin
-    Result := '$0000,$0000,$0000';
-    Exit;
-  end;
-
-  if Number < 0 then
-  begin
-    Sign := True;
-    Number := -Number;
-  end;
-
-  FRExp(Number, Mantissa, Exponent);
-
-  if Exponent < -127 then
-  begin
-    Result := '$0000,$0000,$0000';
-    Exit;
-  end;
-
-  Bytes[0] := Exponent + 128;
-
-  for I := 5 downto 1 do
-  begin
-    Mantissa := Mantissa * 256;
-    Bytes[I] := Trunc(Mantissa);
-    Mantissa := Frac(Mantissa);
-  end;
-
-  if not Sign then Dec(Bytes[5], 128);
-
-  // TODO: If the 11.th. hex digit is larger than 7 the
-  // number should be rounded by adding 1 to BCDEH.
-
-  EncodeReal := '0x' + IntToHex(Bytes[1], 2) + IntToHex(Bytes[0], 2) + ',' +
-                '0x' + IntToHex(Bytes[3], 2) + IntToHex(Bytes[2], 2) + ',' +
-                '0x' + IntToHex(Bytes[5], 2) + IntToHex(Bytes[4], 2);
-end;
-
-(**
  * Checks whether the given floating-point literal is one the Real type and
  * the run-time conversion (Val, Read) accept. The rules are those of CNVN
  * in math48, so that a literal and the same text passed to Val agree: the
@@ -225,6 +180,7 @@ end;
  * 15E37 is fine and 16E37 is not, in TP3 as well, and why the same test is
  * made here.
  *)
+{$ifndef SYS_IR4}
 function RealInRange(S: String): Boolean;
 var
   Number, Mantissa: Extended;
@@ -251,6 +207,16 @@ begin
   FRExp(IntPower(10.0, Exponent), Mantissa, E2);
   RealInRange := E1 + E2 <= 127;
 end;
+{$else}
+function RealInRange(S: String): Boolean;
+var
+  Number: Real;
+  Code: Integer;
+begin
+  Val(S, Number, Code);
+  RealInRange := Code = 0;
+end;
+{$endif}
 
 function NativeToPosix(Native: String): String;
 begin
@@ -368,10 +334,14 @@ end;
 function FSize(Name: String): Integer;
 var
   F: File;
+  {$ifndef SYS_IR4}
   SaveMode: Integer;
+  {$endif}
 begin
+  {$ifndef SYS_IR4}
   SaveMode := FileMode;
   FileMode := 0;
+  {$endif}
 
   {$I-}
   Assign(F, PosixToNative(Name));
@@ -384,40 +354,12 @@ begin
   else FSize := -1;
   {$I+}
 
+  {$ifndef SYS_IR4}
   FileMode := SaveMode;
+  {$endif}
 end;
 
-(**
- * Copies a file, returns Boolean reflecting success or failure.
- *)
-function CopyFile(SrcName, DstName: String): Boolean;
-var
-  Src, Dst: File;
-  Buffer: array[0..511] of Byte;
-  Count: Integer;
-begin
-  {$I-}
-  Assign(Dst, DstName);
-  Rewrite(Dst, 1);
-
-  Assign(Src, SrcName);
-  Reset(Src, 1);
-
-  BlockRead(Src, Buffer, 512, Count);
-
-  while (IOResult = 0) and (Count <> 0) do
-  begin
-    BlockWrite(Dst, Buffer, Count);
-    BlockRead(Src, Buffer, 512, Count);
-  end;
-
-  Close(Src);
-  Close(Dst);
-  {$I+}
-
-  CopyFile := IOResult = 0;
-end;
-
+{$ifndef SYS_IR4}
 {$ifdef darwin}
 function ResolveLink(const APath: string): string;
 var
@@ -431,19 +373,6 @@ begin
     SetString(Result, Buf, Len);
 end;
 {$endif}
-
-function IsRetinaDisplay: Boolean;
-{$ifdef darwin}
-var
-  S: String;
-begin
-  RunCommand('/bin/sh', ['-c', 'system_profiler SPDisplaysDataType | grep -E ''Retina|UHD|4K'''], S);
-  IsRetinaDisplay := Length(TrimStr(S)) <> 0;
-end;
-{$else}
-begin
-  IsRetinaDisplay := False;
-end;
 {$endif}
 
 (**
@@ -451,6 +380,7 @@ end;
  *)
 function GetHomeDir: String;
 begin
+  {$ifndef SYS_IR4}
   {$ifdef darwin}
   Result := ParentDir(ParamStr(0));
   if Result = '' then
@@ -463,6 +393,10 @@ begin
   Result := ParentDir(FAbsolute(NativeToPosix(ParamStr(0))));
   if Result = '' then Result := FAbsolute('.');
   {$endif}
+  {$else}
+  GetHomeDir := ParentDir(FAbsolute(NativeToPosix(ParamStr(0))));
+  if GetHomeDir = '' then GetHomeDir := FAbsolute('.');
+  {$endif}
 end;
 
 (**
@@ -471,241 +405,10 @@ end;
 function GetUserDir: String;
 begin
   {$ifdef windows}
-  Result := NativeToPosix(GetEnv('USERPROFILE'));
+  GetUserDir := NativeToPosix(GetEnv('USERPROFILE'));
   {$else}
-  Result := NativeToPosix(GetEnv('HOME'));
+  GetUserDir := NativeToPosix(GetEnv('HOME'));
   {$endif}
-end;
-
-var
-  LastExitCode: Integer = 0;
-
-(**
- * Replacement for Dos.Exec based on ExecuteProcess, since Dos.Exec cuts the
- * command line off after 255 characters, which is too short for Fuse. Splits
- * the command line into arguments the same way. Like the original, it sets
- * DosError, and DosExitCode below returns the program's exit code. Note that
- * ExecuteProcess also raises EOSError if the program exits with 127, which is
- * what the shell returns for a command it cannot find.
- *
- * To go back to Dos.Exec (e.g. without SysUtils), just remove this procedure,
- * DosExitCode and LastExitCode.
- *)
-procedure Exec(const Path, ComLine: String);
-begin
-  DosError := 0;
-  LastExitCode := 0;
-  try
-    LastExitCode := ExecuteProcess(Path, ComLine);
-  except
-    on EOSError do DosError := 2;
-  end;
-end;
-
-(**
- * Replaces Dos.DosExitCode to go with Exec above.
- *)
-function DosExitCode: Integer;
-begin
-  DosExitCode := LastExitCode;
-end;
-
-var
-  (**
-   * Set when Execute could not start a program. Checked by the self test,
-   * which has to fail if a tool is missing.
-   *)
-  ExecuteFailed: Boolean = False;
-
-(**
- * Executes the given program with the given arguments.
- *)
-procedure Execute(Path, Args: String);
-begin
-  {$ifndef windows}
-  if EndsWith(Path, '.exe') then
-    Exec('/bin/sh', '-c "mono ''' + Path + ''' ' + Args + '"')
-  {$ifdef darwin}
-  else if EndsWith(Path, '.app') then
-    Exec('/bin/sh', '-c "open -n -W -a ''' + Path + ''' --args ' + Args + '"')
-  {$endif}
-  else
-    Exec('/bin/sh', '-c "''' + Path + ''' ' + Args + '"');
-  {$else}
-  Args := ReplaceChar(Args, '''', '"');
-  Exec(Path, Args);
-  {$endif}
-
-  if DosError <> 0 then
-  begin
-    ExecuteFailed := True;
-    {$ifdef windows}
-    WriteLn('The program "', PosixToNative(Path), '" cannot be executed.');
-    {$endif}
-    WriteLn('Is it installed? If so, please check your PATH and/or your ~/.pasta80.cfg file.');
-  end;
-end;
-
-procedure DeleteFile(const Name: String);
-var
-  F: File;
-begin
-  Assign(F, Name);
-  {$i-}
-  Erase(F);
-  IOResult;
-  {$i+}
-end;
-
-procedure CleanDir(const Dir: String);
-var
-  R: SearchRec;
-  F: File;
-begin
-  FindFirst(Dir + '/*', Archive, R);
-  while DosError = 0 do
-  begin
-    Assign(F, Dir + '/' + R.Name);
-    Erase(F);
-    FindNext(R);
-  end;
-
-  FindClose(R);
-end;
-
-function StrFromFile(const FileName: string): String;
-var
-  T: Text;
-  A, S: String;
-begin
-  A := '';
-  Assign(T, FileName);
-  {$i-}
-  Reset(T);
-  while not Eof(T) do
-  begin
-    ReadLn(T, S);
-    if Length(A) <> 0 then A := A + #10;
-    A := A + S;
-  end;
-  Close(T);
-  if IOResult <> 0 then
-    WriteLn('Warning: Cannot read ''', FileName, '. Assuming empty.');
-  {$i+}
-  StrFromFile := A;
-end;
-
-procedure StrToFile(const S, FileName: string);
-var
-  T: Text;
-begin
-  Assign(T, FileName);
-  {$i-}
-  Rewrite(T);
-  WriteLn(T, S);
-  Close(T);
-  {$i+}
-
-  if IOResult <> 0 then
-    WriteLn('Warning: Cannot write ''', FileName, '. Assuming empty.');
-end;
-
-(**
- * Checks whether the given buffer starts with a +3DOS header that describes
- * a BASIC program.
- *)
-function IsBasicHeader(const Buffer: array of Byte; Count: Integer): Boolean;
-const
-  Signature = 'PLUS3DOS';
-var
-  I: Integer;
-begin
-  IsBasicHeader := (Count >= 128) and (Buffer[15] = 0);
-  for I := 0 to 7 do
-    if Buffer[I] <> Ord(Signature[I + 1]) then IsBasicHeader := False;
-end;
-
-(**
- * Checks whether the given file is a BASIC program with +3DOS header, which
- * is what the ZX loaders need to be.
- *)
-function IsBasicLoader(const FileName: String): Boolean;
-var
-  F: File;
-  Buffer: array[0..127] of Byte;
-  Count: Integer;
-begin
-  IsBasicLoader := False;
-
-  {$i-}
-  Assign(F, FileName);
-  Reset(F, 1);
-  if IOResult <> 0 then Exit;
-
-  BlockRead(F, Buffer, SizeOf(Buffer), Count);
-  IsBasicLoader := (IOResult = 0) and IsBasicHeader(Buffer, Count);
-
-  Close(F);
-  IOResult;
-  {$i+}
-end;
-
-(**
- * Adjusts the CLEAR statement that opens a BASIC loader in +3DOS format to the
- * given RAMTOP. Everything else in the loader is supposed to be derived from
- * RAMTOP at runtime. A loader that doesn't follow this convention is left
- * alone (with a warning). Returns False only for actual I/O errors.
- *)
-function PatchLoader(const FileName: String; RamTop: Integer): Boolean;
-var
-  F: File;
-  Buffer: array[0..143] of Byte;
-  Count, I: Integer;
-  S: String;
-  Ok: Boolean;
-begin
-  PatchLoader := False;
-
-  {$i-}
-  Assign(F, FileName);
-  Reset(F, 1);
-  if IOResult <> 0 then Exit;
-
-  BlockRead(F, Buffer, SizeOf(Buffer), Count);
-  if IOResult <> 0 then
-  begin
-    Close(F);
-    IOResult;
-    Exit;
-  end;
-
-  (* Expected: +3DOS header, BASIC program, first line "CLEAR nnnnn" with the
-   * number in small integer form, and a RAMTOP that also has five digits. *)
-  Ok := (Count = SizeOf(Buffer)) and IsBasicHeader(Buffer, Count)
-    and (Buffer[132] = $FD) and (Buffer[138] = $0E)
-    and (Buffer[139] = 0) and (Buffer[140] = 0)
-    and (RamTop >= 10000) and (RamTop <= 65535);
-
-  for I := 133 to 137 do
-    Ok := Ok and (Chr(Buffer[I]) in ['0'..'9']);
-
-  if Ok then
-  begin
-    S := IntToStr(RamTop);
-    for I := 1 to 5 do Buffer[132 + I] := Ord(S[I]);
-    Buffer[141] := RamTop and $FF;
-    Buffer[142] := RamTop shr 8;
-    Buffer[143] := 0;
-
-    Seek(F, 133);
-    BlockWrite(F, Buffer[133], 11);
-  end
-  else
-    WriteLn('Warning: Unable to patch loader');
-
-  Close(F);
-  PatchLoader := IOResult = 0;
-  {$i+}
 end;
 
 (* -------------------------------------------------------------------------- *)
@@ -713,68 +416,35 @@ end;
 (* -------------------------------------------------------------------------- *)
 
 type
-  (**
-   * The three platforms we currently support.
-   *)
-  TBinaryType = (btCPM, btZX, btZX128, btZXN, btAgon);
+  TIR4Tuple = record
+    C, I, A, F: Integer;
+  end;
 
-  (**
-   * The possible output formats.
-   *)
-  TTargetFormat = (tfBinary, tfPlus3Dos, tfTape, tfSnapshot, tfRunDir, tfMOSlet);
-
-var
-  (**
-   * The type of binary we are generating.
-   *)
-  Binary: TBinaryType = btCPM;
-
-  (**
-   * The format we are producing.
-   *)
-  Format: TTargetFormat = tfBinary;
-
-  AddrOrigin: Integer = 256;
-
-  AddrLimit: Integer = 61440;
-
-  StackSize: Integer = 4096;
-
-  Overlays: Boolean = True;
-  Release: Boolean = False;
-  KeepInt: Boolean = False;
-  UsePrinter: Boolean = False;
-
-  (**
-   * The BASIC loader to put in front of the code on the ZX targets, set by
-   * --loader. Empty means the stock one from misc/ that fits the target.
-   *)
-  LoaderFile: String = '';
-
-  (**
-   * The start address of the code on the ZX targets, set by --start. Zero means
-   * the default of $8000.
-   *)
-  CustomOrigin: Integer = 0;
-
-  (**
-   * The command line arguments to be applied when starting the program,
-   * for platforms that support it. Currently only used internally during
-   * self-testing.
-   *)
-   StartParams: String = '';
+  PIR4Chunk = ^TIR4Chunk;
+  TIR4Chunk = record
+    Text: String;
+    Next: PIR4Chunk;
+  end;
 
 var
-  HomeDir, SjAsmCmd, NanoCmd, CodeCmd, TnylpoCmd, FuseCmd: String;
-  MonkeyCmd, CSpectCmd, ImagePath, FabAgonDir: String;
-  AltEditor: Boolean;
+  Release: Boolean;
+  IR4LineOpen: Boolean;
+  IR4Buffering: Boolean;
+  IR4Head: PIR4Chunk;
+  IR4Tail: PIR4Chunk;
+  IR4FnSig: String;
+  IR4Frame: TIR4Tuple;
+  IR4BaseFrame: TIR4Tuple;
+  IR4MaxFrame: TIR4Tuple;
+  SavedIR4Frames: array[0..7] of TIR4Tuple;
+  IR4CaseTemp: String;
 
 var
-  SrcFile, AsmFile, BinFile: String;
+  HomeDir: String;
+  SrcFile, AsmFile: String;
 
 (**
- * Tries to setup the compiler's home directory and the paths to various tools,
- * first by "guessing" via "which", then by loading a config file.
+ * Tries to setup the compiler's home directory and optional config overrides.
  *)
 procedure LoadConfig;
 var
@@ -784,15 +454,6 @@ var
 begin
   HomeDir := GetHomeDir;
   UserDir := GetUserDir;
-
-  SjAsmCmd  := 'sjasmplus';
-  NanoCmd   := 'nano';
-  CodeCmd   := 'code';
-  TnylpoCmd := 'tnylpo';
-  FuseCmd   := {$ifdef darwin} 'Fuse.app' {$else} 'fuse' {$endif};
-  MonkeyCmd := 'hdfmonkey';
-  CSpectCmd := {$ifndef windows} 'CSpect.exe' {$else} 'CSpect' {$endif};
-  ImagePath := 'tbblue.img';
 
   {$I-}
   Assign(T, UserDir + '/.pasta80.cfg');
@@ -814,135 +475,13 @@ begin
             Value := UserDir + Copy(Value, 2, 255);
 
           if (Key = 'home') or (Key = 'pasta') then
-            HomeDir := Value
-          else if Key = 'assembler' then
-            SjAsmCmd := Value
-          else if Key = 'editor' then
-            NanoCmd := Value
-          else if Key = 'vscode' then
-            CodeCmd := Value
-          else if Key = 'tnylpo' then
-            TnylpoCmd := Value
-          else if Key = 'fuse' then
-            FuseCmd := Value
-          else if Key = 'hdfmonkey' then
-            MonkeyCmd := Value
-          else if Key = 'cspect' then
-            CSpectCmd := Value
-          else if Key = 'image' then
-            ImagePath := Value
-          else if (Key = 'agon') or (Key = 'fabagon') then
-            FabAgonDir := Value
-          else
-          begin
-            WriteLn('Invalid config key: ' + Key);
-            Halt;
-          end;
+            HomeDir := Value;
         end;
       end;
     end;
     Close(T);
-  end
-  else
-  begin
-    WriteLn('Warning: File ~/.pasta80.cfg not found. Please consider creating it.');
-    WriteLn;
   end;
   {$I+}
-
-  AltEditor := GetEnv('TERM_PROGRAM') = 'vscode'; // Are we running inside VSC?
-end;
-
-procedure WriteCheck(B: Boolean);
-begin
-  if B then Write('[X] ') else Write('[ ] ');
-end;
-
-function CheckPath(const Src: String; var Dst: String): Boolean;
-const
-  Cmd = {$ifdef windows} 'where' {$else} 'which' {$endif};
-  {$ifdef darwin}
-  Fuse = '/Applications/Fuse.app/Contents/MacOS/Fuse';
-  {$endif}
-begin
-  if Pos('/', Src) <> 0 then
-  begin
-    Dst := FAbsolute(Src);
-    {$ifdef windows}
-    if not EndsWith(Dst, '.exe') then Dst := Dst + '.exe';
-    {$endif}
-    CheckPath := FSize(Dst) <> -1;
-  end
-  {$ifdef darwin}
-  else if Src = 'Fuse.app' then
-  begin
-    if FSize(Fuse) <> -1 then
-    begin
-      Dst := Fuse;
-      CheckPath := True;
-    end
-    else if FSize(GetHomeDir + Fuse) <> -1 then
-    begin
-      Dst := GetHomeDir + Fuse;
-      CheckPath := True;
-    end
-    else
-    begin
-      Dst := Src;
-      CheckPath := False;
-    end
-  end
-  {$endif}
-  else
-  begin
-    if RunCommand(Cmd, Src, Dst) then
-    begin
-      Dst := TrimStr(Dst);
-      CheckPath := True;
-    end
-    else CheckPath := False;
-  end;
-end;
-
-procedure Doctor;
-var
-  S: String;
-begin
-  WriteLn('--- Compiler ---');
-  WriteLn;
-  WriteCheck(FSize(HomeDir + '/rtl/system.pas') <> -1);
-  Writeln('Directory: ', HomeDir);
-  WriteCheck(CheckPath(SjAsmCmd, S));
-  Writeln('Assembler: ', S);
-  WriteLn;
-  WriteLn('--- Mini IDE ---');
-  WriteLn;
-  if AltEditor then
-    WriteCheck(CheckPath(CodeCmd, S))
-  else
-    WriteCheck(CheckPath(NanoCmd, S));
-  Writeln('Editor   : ', S);
-  WriteLn;
-  WriteCheck(CheckPath(TnylpoCmd, S));
-  Writeln('Tnylpo   : ', S);
-  WriteCheck(CheckPath(FuseCmd, S));
-  Writeln('Fuse     : ', S);
-  WriteCheck(CheckPath(CSpectCmd, S));
-  Writeln('CSpect   : ', S);
-  WriteCheck(CheckPath(FabAgonDir + '/fab-agon-emulator', S));
-  Writeln('Fab Agon : ', ParentDir(S));
-  WriteLn;
-  WriteLn('--- SpecNext ---');
-  WriteLn;
-  WriteCheck(FSize(ImagePath) <> -1);
-  Writeln('SD card  : ', ImagePath);
-  WriteCheck(CheckPath(MonkeyCmd, S));
-  Writeln('HdfMonkey: ', S);
-  {$ifndef windows}
-  WriteCheck(CheckPath('mono', S));
-  Writeln('Mono     : ', S);
-  {$endif}
-  WriteLn;
 end;
 
 procedure Emit(Tag, Instruction, Comment: String); forward;
@@ -983,9 +522,20 @@ var
 procedure OpenInput(FileName: String);
 var
   Tmp: PSource;
+  Cand: String;
 begin
   if (Source <> nil) and IsRelative(FileName) then
-    FileName := ParentDir(FAbsolute(Source^.Name)) + '/' + FileName;
+  begin
+    Cand := ParentDir(FAbsolute(Source^.Name)) + '/' + FileName;
+    if FSize(Cand) <> -1 then
+      FileName := Cand
+    else if FSize(HomeDir + '/rtl/' + FileName) <> -1 then
+      FileName := FAbsolute(HomeDir + '/rtl/' + FileName)
+    else if FSize(HomeDir + '/../pasta84/rtl/' + FileName) <> -1 then
+      FileName := FAbsolute(HomeDir + '/../pasta84/rtl/' + FileName)
+    else
+      FileName := Cand;
+  end;
 
   Tmp := Source;
   while Tmp <> nil do
@@ -1021,7 +571,7 @@ end;
  * Closes the current input file and resumes scanning/parsing of the enclosing
  * input file (if one exists).
  *)
-procedure CloseInput();
+procedure CloseInput;
 var
   Tmp: PSource;
 begin
@@ -1037,7 +587,7 @@ procedure EmitC(S: String); forward;
  * Returns (and consumes) the next input character. This function is called
  * routinely by the scanner.
  *)
-function GetChar(): Char;
+function GetChar: Char;
 begin
   with Source^ do
   begin
@@ -1071,7 +621,7 @@ end;
  * is called by the scanner. It must not be called at the beginning of a line
  * or source code file, but this never happens.
  *)
-procedure UngetChar();
+procedure UngetChar;
 begin
   Source^.Column := Source^.Column - 1;
 end;
@@ -1181,15 +731,12 @@ type
     Prev, Next: PSymbol;                // Previous and next in linked list
     IsMagic: Boolean;                   // Magics are built into the compiler
     IsRef: Boolean;                     // Symbol is a reference (var param)
-    IsStdCall: Boolean;                 // Procedure/function calling convention
+    IsParam: Boolean;                   // Symbol is a procedure/function param
     IsForward: Boolean;                 // Forward-declared procedure/function
-    IsExternal: Boolean;                // External, to be resolved by assembler
+    IsExternal: Boolean;                // External, to be resolved later
     SavedParams: PSymbol;               // Original parameters, forward-case only
-    IsAlive: Boolean;
-    Deps: array[0..127] of PSymbol;
-    DepCount: Integer;
-    Banked: Boolean;
-    BankNo: Byte;
+    IrC, IrI, IrA, IrF: Integer;
+    WithC, WithI, WithA, WithF: Integer;
   end;
 
 var
@@ -1197,24 +744,22 @@ var
    * The head (aka newest entry) of our symbol table. Searches for an identifier
    * usually start from here.
    *)
-  SymbolTable: PSymbol = nil;
+  SymbolTable: PSymbol;
 
   (**
    * The most recent scope marker.
    *)
-  CurrentScope: PSymbol = nil;
+  CurrentScope: PSymbol;
 
   (**
    * The last built-in identifier.
    *)
-  LastBuiltIn: PSymbol = nil;
-
-  CurrentBlock: PSymbol = nil;
+  LastBuiltIn: PSymbol;
 
   (**
-   * Nesting level and variable offset. Maintained by compiler.
+   * Nesting level. Maintained by compiler.
    *)
-  Level, Offset: Integer;
+  Level: Integer;
 
   (**
    * Pointers to several important built-in base types.
@@ -1223,9 +768,9 @@ var
   dtText, dtUnknown: PSymbol;
 
   (**
-   * Pointers to the built-in Mem[] and Port[] pseudo-arrays.
+   * Pointer to the built-in Mem[] pseudo-array.
    *)
-  MemArray, PortArray: PSymbol;
+  MemArray: PSymbol;
 
   (**
    * Pointers to a whole lot of built-in procedures and functions that are
@@ -1239,16 +784,8 @@ var
   FileSizeFunc, EolFunc, EofFunc, AbsFunc, AddrFunc, DisposeProc, EvenFunc,
   HighFunc, LowFunc, NewProc, OddFunc, OrdFunc, PredFunc, FillProc, IncProc,
   DecProc, ConcatFunc, ValProc, IncludeProc, ExcludeProc, PtrFunc, SizeFunc,
-  SuccFunc, BDosFunc, BDosHLFunc, DebugProc, RandomFunc,
+  SuccFunc, DebugProc, RandomFunc,
   InsertProc, DeleteProc: PSymbol;
-
-  SmartLink: Boolean = True; (* TODO Move elsewhere *)
-
-const
-  Banked: Boolean = False;
-  CurrentOverlay: Byte = 0;
-  CurrentBank: Byte = 0;
-  ToastrackBanks: array[0..9] of Byte = (0, 0, 1, 1, 3, 3, 4, 4, 6, 6);
 
 (**
  * Disposes a single symbol table entry and rewires Sym to its predecessor
@@ -1293,7 +830,6 @@ begin
   Sym^.Prev := SymbolTable;
   Sym^.DataType := CurrentScope;
   if SymbolTable <> nil then SymbolTable^.Next := Sym;
-  Sym^.Value := Offset;
   SymbolTable := Sym;
   CurrentScope := Sym;
 
@@ -1301,8 +837,12 @@ begin
   begin
     if Level = 7 then Error('Nesting too deep.');
 
+    SavedIR4Frames[Level] := IR4Frame;
     Level := Level + 1;
-    Offset := 0;
+    IR4Frame.C := 0;
+    IR4Frame.I := 0;
+    IR4Frame.A := 1; { Slot 0 reserved for saved __display[Level] }
+    IR4Frame.F := 0;
   end;
 end;
 
@@ -1320,25 +860,8 @@ begin
   begin
     Kind := SymbolTable^.Kind;
 
-    if ((Kind = scProc) or (Kind = scFunc)) then with SymbolTable^ do
-    begin
-      if IsForward then
-        Error('Unresolved forward declaration "' + SymbolTable^.Name + '"');
-
-      (* Nameless entries are the placeholders left behind when the body of a
-         forward declaration is parsed. They share the tag of the real one. *)
-      if SmartLink and (Level = 0) and not IsExternal and not IsMagic and (Name <> '') then
-      begin
-        if IsAlive then
-        begin
-          Emit('__USE' + Tag, 'equ 1', '');
-//          for I := 0 to DepCount - 1 do
-//            Deps[I]^.IsAlive := True;
-        end
-        else
-          Emit('__USE' + Tag, 'equ 0', '');
-      end;
-    end;
+    if ((Kind = scProc) or (Kind = scFunc)) and SymbolTable^.IsForward then
+      Error('Unresolved forward declaration "' + SymbolTable^.Name + '"');
 
     FreeAndNilSymbol(SymbolTable);
   end;
@@ -1348,56 +871,11 @@ begin
   if AdjustLevel then
   begin
     Level := Level - 1;
-    Offset := SymbolTable^.Value;
+    IR4Frame := SavedIR4Frames[Level];
   end;
 
   FreeAndNilSymbol(SymbolTable);
 end;
-
-procedure Dependencies(Sym: PSymbol);
-var
-  I: Integer;
-begin
-  with Sym^ do
-  begin
-    //WriteLn('*** ', Name);
-
-    if IsAlive then Exit;
-
-    //WriteLn(Name, ' is alive');
-
-    IsAlive := True;
-
-    for I := 0 to DepCount - 1 do
-      Dependencies(Deps[I]);
-  end;
-end;
-
-procedure AddDependency(Src, Dst: PSymbol);
-var
-  I: Integer;
-begin
-    if (Src <> nil) then
-    begin
-      if Dst <> Src then with Src^ do
-      begin
-        for I := 0 to DepCount - 1 do
-          if Deps[I] = Dst then Exit;
-
-        if DepCount = 128 then Error('Too many dependencies'); (* TODO Fix me! *)
-
-        //WriteLn(CurrentBlock^.Name, ' depends on ', Sym^.Name);
-
-        Deps[DepCount] := Dst;
-        Inc(DepCount);
-      end
-    end
-    else
-    begin
-      //WriteLn('Main program depends on ', Sym^.Name);
-      Dependencies(Dst);
-    end;
-  end;
 (**
  * Searches the symbol table for the given identifier. Returns the symbol or
  * nil if it does not exist. The search starts and stops at the given symbols,
@@ -1466,9 +944,8 @@ end;
 
 (**
  * This procedure is called when a procedure or function header is fully
- * parsed. It calculates the final offsets of all parameters relative to the
- * base pointer according to their sizes. We cannot do this earlier because we
- * don't know in advance the number of parameters, nor their sizes.
+ * parsed. It records the parameter count and parameter metadata on the
+ * procedure/function symbol.
  *)
 procedure AdjustOffsets;
 var
@@ -1480,10 +957,7 @@ begin
   while (Sym^.Kind<>scProc) and (Sym^.Kind<>scFunc) do
   begin
     if Sym^.Kind = scVar then
-    begin
-      Sym^.Value := Sym^.Value - Offset + 4;
       I := I + 1;
-    end;
     Sym := Sym^.Prev;
   end;
   if Sym^.Kind = scFunc then
@@ -1501,8 +975,6 @@ begin
     end;
     Sym2 := Sym2^.Prev;
   end;
-
-  Offset := 0;
 end;
 
 (**
@@ -1536,29 +1008,25 @@ end;
  * parameters, it will be adjusted later once all parameters are known).
  *)
 procedure SetDataType(Sym: PSymbol; DataType: PSymbol; IsParam: Boolean);
-var
-  Size: Integer;
 begin
   Sym^.DataType := DataType;
+  Sym^.IsParam := IsParam;
 
-  if (Level = 0) and (Sym^.Tag = '') then
+  if not ((Level = 0) and (Sym^.Tag = '')) then
   begin
-    // TODO Improve this! It's an ugly way of detecting global variables.
-    // TODO Move away from mixed code/data to a separate data segment.
-  end
-  else
-  begin
+    Sym^.IrC := IR4Frame.C;
+    Sym^.IrI := IR4Frame.I;
+    Sym^.IrA := IR4Frame.A;
+    Sym^.IrF := IR4Frame.F;
     if Sym^.IsRef then
-      Size := 2                            // A var parameter requires two bytes
-    else if IsParam and (DataType^.Kind = scStringType) then
-      Size := 256                          // __loadstr always reserves 256 bytes
-    else if DataType^.Value = 1 then
-      Size := 2                            // Two bytes is also the minimum on the stack
+      Inc(IR4Frame.A)
     else
-      Size := DataType^.Value;             // Everything else just uses its real size
-
-    Offset := Offset - Size;
-    Sym^.Value := Offset;
+    begin
+      Inc(IR4Frame.C, DataType^.IrC);
+      Inc(IR4Frame.I, DataType^.IrI);
+      Inc(IR4Frame.A, DataType^.IrA);
+      Inc(IR4Frame.F, DataType^.IrF);
+    end;
   end;
 end;
 
@@ -1609,25 +1077,29 @@ begin
 end;
 
 function TypeName(Symbol: PSymbol): String;
+var
+  S: String;
 begin
-  Result := Symbol^.Name;
+  S := Symbol^.Name;
 
-  if Result = '' then
+  if S = '' then
   begin
     case Symbol^.Kind of
-      scAliasType:    Result := ' alias';
-      scArrayType:    Result := ' array';
-      scEnumType:     Result := ' enum';
-      scFileType:     Result := ' file';
-      scPointerType:  Result := ' pointer';
-      scRecordType:   Result := ' record';
-      scSetType:      Result := ' set';
-      scStringType:   Result := ' string';
-      scSubrangeType: Result := ' subrange';
+      scAliasType:    S := ' alias';
+      scArrayType:    S := ' array';
+      scEnumType:     S := ' enum';
+      scFileType:     S := ' file';
+      scPointerType:  S := ' pointer';
+      scRecordType:   S := ' record';
+      scSetType:      S := ' set';
+      scStringType:   S := ' string';
+      scSubrangeType: S := ' subrange';
     end;
 
-    Result := 'anonymous' + Result + ' type';
-  end
+    S := 'anonymous' + S + ' type';
+  end;
+
+  TypeName := S;
 end;
 
 (**
@@ -1652,11 +1124,13 @@ begin
   dtInteger := RegisterType('Integer', 2);
   dtInteger^.Low := -32768;
   dtInteger^.High := 32767;
+  dtInteger^.IrI := 1;
 
   dtBoolean := NewEnumType('Boolean');
   dtBoolean^.Low := 0;
   dtBoolean^.High := 1;
   dtBoolean^.Tag := '__boolean_enum';
+  dtBoolean^.IrC := 1;
   NewConst('False', dtBoolean, 0);
   NewConst('True', dtBoolean, 1);
 
@@ -1664,28 +1138,35 @@ begin
   dtChar^.Low := 0;
   dtChar^.High := 255;
   dtChar^.Value := 1;
+  dtChar^.IrC := 1;
   dtByte := RegisterType('Byte', 1);
   dtByte^.Low := 0;
   dtByte^.High := 255;
   dtByte^.Value := 1;
+  dtByte^.IrC := 1;
 
   dtString := CreateSymbol(scStringType, 'String');
   dtString^.Value := 256;
+  dtString^.IrC := 256;
 
   (* Placeholder sizes. The real ones depend on the platform's
      FileControlBlock and are only known once the RTL has been parsed;
      ParseProgram patches these from FileRec/TextRec at that point. *)
   dtFile := CreateSymbol(scFileType, 'File');
   dtFile^.Value := 256;
+  dtFile^.IrC := 256;
 
   dtText := CreateSymbol(scFileType, 'Text');
   dtText^.Value := 256;
+  dtText^.IrC := 256;
 
   dtReal := CreateSymbol(scType, 'Real');
   dtReal^.Value := 6;
+  dtReal^.IrF := 1;
 
   dtPointer := CreateSymbol(scPointerType, 'Pointer');
   dtPointer^.Value := 2;
+  dtPointer^.IrA := 1;
 
   dtUnknown := CreateSymbol(scType, '<unknown>');
   dtUnknown^.Value := 0;
@@ -1693,10 +1174,6 @@ begin
   MemArray := CreateSymbol(scVar, 'Mem');
   MemArray^.DataType := dtByte;
   MemArray^.IsMagic := True;
-
-  PortArray := CreateSymbol(scVar, 'Port');
-  PortArray^.DataType := dtByte;
-  PortArray^.IsMagic := True;
 
   AssertProc := RegisterMagic(scProc, 'Assert');
   DebugProc := RegisterMagic(scProc, 'Debug');
@@ -1759,17 +1236,6 @@ begin
   SizeFunc := RegisterMagic(scFunc, 'SizeOf');
   SuccFunc := RegisterMagic(scFunc, 'Succ');
   RandomFunc := RegisterMagic(scFunc, 'Random');
-
-  if Binary = btCPM then
-  begin
-    BDosFunc := RegisterMagic(scFunc, 'Bdos');
-    BDosHLFunc := RegisterMagic(scFunc, 'BdosHL');
-  end
-  else if Binary = btAgon then
-  begin
-    BDosFunc := RegisterMagic(scFunc, 'Bdos');    (* temporary until we remove the BDOS references*)
-    BDosHLFunc := RegisterMagic(scFunc, 'BdosHL');
-  end;
 end;
 
 (* --------------------------------------------------------------------- *)
@@ -1790,15 +1256,12 @@ type
   end;
 
 var
-  Defines: PDefine = nil;               // The head of the definition list
+  Defines: PDefine;                     // The head of the definition list
   IfDefStack: array[0..15] of Boolean;  // The stack for nested $IFDEFs
-  IfDefLevel: Integer = -1;             // Index in that stack
-  ScannerMuted: Boolean = False;        // Whether the scanner is muted
+  IfDefLevel: Integer;                  // Index in that stack
+  ScannerMuted: Boolean;                // Whether the scanner is muted
 
-  AbsCode: Boolean = False;             // Controls absolute mode
-  CheckBreak: Boolean = False;          // Controls break checking
-  IOMode: Boolean = True;               // Controls IO checking
-  StackMode: Boolean = False;           // Controls stack checking
+  IOMode: Boolean;                      // Controls IO checking
 
 (**
  * Clears all defines. Needed for multiple compiler runs in IDE.
@@ -1867,8 +1330,6 @@ begin
     Defines := P;
   end
   else P^.Value := B;
-
-  if B then EmitI('define ' + S) else EmitI('undefine ' + S);
 end;
 
 (**
@@ -1946,10 +1407,8 @@ var
       end;
 
       case C of
-        'a': AbsCode    := B;
-        'i': IOMode     := B;
-        'k': StackMode  := B;
-        'u': CheckBreak := B;
+        'a', 'k', 'u': ;
+        'i': IOMode := B;
       else
         Invalid;
       end;
@@ -2002,10 +1461,7 @@ begin
     else if S = '$l' then
       SetLibrary(NativeToPosix(T))
     else if S = '$m' then
-    begin
-      Val(T, StackSize, P);
-      if P <> 0 then Error('Invalid stack size');
-    end
+      begin end
     else
       Switches;
   end;
@@ -2152,7 +1608,7 @@ var
  *
  * TODO Pull a couple of longer blocks into their own procedures.
  *)
-procedure NextToken();
+procedure NextToken;
 
   function DecDigit(C: Char): Integer;
   begin
@@ -2256,7 +1712,7 @@ begin
             until not IsDecDigit(C);
           end;
 
-          if (Token = toFloat) and not RealInRange(StrValue) then
+          if (Token = toFloat) and not ScannerMuted and not RealInRange(StrValue) then
             Error('Real constant out of range');
         end
         else if C = '$' then
@@ -2519,6 +1975,7 @@ end;
 (* --- Error handling ------------------------------------------------------- *)
 (* -------------------------------------------------------------------------- *)
 
+{$ifndef SYS_IR4}
 type
   (**
    * Raised by Error to unwind the parser back to the point where parsing was
@@ -2534,26 +1991,17 @@ type
 
 var
   (**
-   * The file in which an error occurred.
-   *)
-  ErrorFile: String;
-
-  (**
-   * The line and column where an error occurred.
-   *)
-  ErrorLine, ErrorColumn: Integer;
-
-  (**
    * Whether a try/except block is currently in place to catch ECompileError,
    * i.e. whether Error should raise it or just halt directly.
    *)
   HasStoredState: Boolean;
+  {$endif}
 
 (**
  * Reports an error and raises ECompileError to unwind back to the point
  * where parsing was started.
  *)
-procedure Error(Message: String);
+procedure Error;
 var
   I: Integer;
 begin
@@ -2565,22 +2013,17 @@ begin
     for I := 1 to TokenColumn - 1 do Write(' ');
     WriteLn('^');
     WriteLn('*** Error at ', PosixToNative(FRelative(Source^.Name)), '(', TokenLine, ',', TokenColumn, '): ', Message);
-    ErrorFile := Source^.Name;
-    ErrorLine := TokenLine;
-    ErrorColumn := TokenColumn;
   end
   else
-  begin
     WriteLn('*** Error: ', Message);
-    ErrorLine := 0;
-    ErrorColumn := 0;
-  end;
 
+  {$ifndef SYS_IR4}
   if HasStoredState then
     raise ECompileError.Create
   else
+  {$endif}
   begin
-    WriteLn();
+    WriteLn;
     Halt(1);
   end;
 end;
@@ -2589,28 +2032,9 @@ end;
 (* --- Emitter -------------------------------------------------------------- *)
 (* -------------------------------------------------------------------------- *)
 
-type
-  (**
-   * An element of "outgoing code". These are organized in a linked list and
-   * subject to optimization. The list will be flushed on each label that is
-   * being written and at the end of a procedure or function.
-   *
-   * TODO Simplify this. Write either a label (which always goes directly into
-   * the file) or an instruction. Split instruction into opcode and the two
-   * arguments, so the optimizer's life gets easier. Maybe drop comments
-   * completely.
-   *)
-  PCode = ^TCode;
-  TCode = record
-    Tag, Instruction, Comment: String;  // Label, instruction, and comment
-    Next, Prev: PCode;                  // Successor and predecessor
-
-    // TODO Make this Instr, Oper1, Oper2
-  end;
-
 var
   (**
-   * The text file we are writing assembly code to.
+   * The text file we are writing IR4 code to.
    *)
   Target: Text;
 
@@ -2620,27 +2044,13 @@ var
   NextLabel: Integer;
 
   (**
-   * Reflects whether the optimizer is enabled.
-   *
-   * TODO Move this into a central place together with other compiler switches.
-   *)
-  Optimize: Boolean = True;
-
-  (**
    * Contains the current jump target for the Exit statement.
    *
    * TODO Should this be elsewhere, maybe together with Break/Continue?
    *)
   ExitTarget: String;
 
-  (**
-   * The most recent line of assembly code generated.
-   *
-   * TODO Should we have a sentinel here to make the optimizer code simpler?
-   *)
-  Code: PCode = nil;
-
-  Muted: Integer = 0;
+  Muted: Integer;
 
 procedure MuteEmitter;
 begin
@@ -2650,39 +2060,6 @@ end;
 procedure UnmuteEmitter;
 begin
   Dec(Muted);
-end;
-
-(**
- * Appends a line of assembly code consisting of the three given elements, any
- * of which may be the empty string.
- *)
-procedure AppendCode(Tag, Instruction, Comment: String);
-var
-  Temp: PCode;
-begin
-  New(Temp);
-  Temp^.Tag := Tag;
-  Temp^.Instruction := Instruction;
-  Temp^.Comment := Comment;
-  Temp^.Prev := Code;
-  Temp^.Next := nil;
-  if Code <> nil then
-    Code^.Next := Temp;
-  Code := Temp;
-end;
-
-(**
- * Removes the most-recently generated line of assembly code.
- *)
-procedure RemoveCode();
-var
-  Temp: PCode;
-begin
-  Temp := Code;
-  Code := Code^.Prev;
-  if Code <> nil then
-    Code^.Next := nil;
-  Dispose(Temp);
 end;
 
 (**
@@ -2699,7 +2076,7 @@ end;
  *
  * TODO Is this in the right place?
  *)
-function GetLabel(Prefix: String): String;
+function GetLabel;
 begin
   GetLabel := Prefix + IntToStr(NextLabel);
   NextLabel := NextLabel + 1;
@@ -2707,370 +2084,218 @@ end;
 
 // Emit(Col1, Col2, Col3, Col4)
 
-procedure Emit0(Tag, Instruction, Comment: String);
+procedure ClearIR4Chunks;
 var
-  P: Integer;
-  S: String;
+  Tmp: PIR4Chunk;
 begin
-  if (Tag = '') and (Instruction = '') and (Comment <> '') then
+  while IR4Head <> nil do
   begin
-    WriteLn(Target, '; ', Comment);
-    Exit;
+    Tmp := IR4Head^.Next;
+    Dispose(IR4Head);
+    IR4Head := Tmp;
   end;
-
-  S := '';
-
-  if Tag <> '' then S := S + Tag + ':';
-
-  if Instruction <> '' then
-  begin
-(*
-    if Instruction = 'ld de,(hl)' then
-      Instruction := 'ld e,(hl) \ inc hl \ ld d,(hl)'
-    else if Instruction = 'ld (hl),de' then
-      Instruction := 'ld (hl),e \ inc hl \ ld (hl),d'
-    else if Instruction = 'ld bc,(hl)' then
-      Instruction := 'ld c,(hl) \ inc hl \ ld b,(hl)';
-*)
-
-    P := Pos(' ', Instruction);
-    if P <> 0 then
-      Instruction := PadStr(Copy(Instruction, 1, P-1), 7) + ' ' + Copy(Instruction, P+1, 255);
-
-    S := PadStr(S, 16) + Instruction;
-  end;
-
-  if Comment <> '' then
-    S := PadStr(S, 40) + '; ' + Comment;
-
-  WriteLn(Target, S);
+  IR4Tail := nil;
+  IR4Buffering := False;
 end;
 
-procedure Flush;
+procedure FlushIR4Chunks;
 var
-  Temp: PCode;
+  Tmp: PIR4Chunk;
 begin
-  if not Optimize or (Code = nil) then Exit;
-
-  while Code^.Prev <> nil do
-    Code := Code^.Prev;
-
-  while Code <> nil do
+  while IR4Head <> nil do
   begin
-    if (Code^.Tag <> '') or (Code^.Instruction <> '') or (Code^.Comment <> '') then
-      Emit0(Code^.Tag, Code^.Instruction, Code^.Comment);
-    Temp := Code;
-    Code := Code^.Next;
-    Dispose(Temp);
+    Write(Target, IR4Head^.Text);
+    Tmp := IR4Head^.Next;
+    Dispose(IR4Head);
+    IR4Head := Tmp;
+  end;
+  IR4Tail := nil;
+end;
+
+procedure IR4Out((* const *) S: String);
+var
+  Chunk: PIR4Chunk;
+begin
+  if Length(S) = 0 then Exit;
+  if not IR4Buffering then
+  begin
+    Write(Target, S);
+    Exit;
+  end;
+  if (IR4Tail <> nil) and (Length(IR4Tail^.Text) + Length(S) <= 255) then
+    IR4Tail^.Text := IR4Tail^.Text + S
+  else
+  begin
+    New(Chunk);
+    Chunk^.Text := S;
+    Chunk^.Next := nil;
+    if IR4Tail <> nil then
+      IR4Tail^.Next := Chunk
+    else
+      IR4Head := Chunk;
+    IR4Tail := Chunk;
+  end;
+end;
+
+procedure IR4OutLn((* const *) S: String);
+begin
+  IR4Out(S);
+  IR4Out(#10);
+end;
+
+function IR4MaxBytes(C, I, A, F: Integer): Integer;
+var
+  Res: Integer;
+begin
+  Res := C + 8 * (I + A + F);
+  if Res < 1 then Res := 1;
+  IR4MaxBytes := Res;
+end;
+
+function IR4TupleExprStr(C, I, A, F: Integer): String;
+var
+  S: String;
+  Has: Boolean;
+  procedure AppendTerm((* const *) T: String);
+  begin
+    if not Has then
+    begin
+      S := T;
+      Has := True;
+    end
+    else
+      S := S + ' ' + T + ' +';
+  end;
+begin
+  S := '0';
+  Has := False;
+  if C <> 0 then AppendTerm(IntToStr(C));
+  if I <> 0 then
+  begin
+    if I = 1 then AppendTerm('size_i')
+    else AppendTerm('size_i ' + IntToStr(I) + ' *');
+  end;
+  if A <> 0 then
+  begin
+    if A = 1 then AppendTerm('size_a')
+    else AppendTerm('size_a ' + IntToStr(A) + ' *');
+  end;
+  if F <> 0 then
+  begin
+    if F = 1 then AppendTerm('size_f')
+    else AppendTerm('size_f ' + IntToStr(F) + ' *');
+  end;
+  IR4TupleExprStr := S;
+end;
+
+function IsIR4ScalarType(DataType: PSymbol): Boolean;
+begin
+  if DataType = nil then begin IsIR4ScalarType := False; Exit; end;
+  while DataType^.Kind = scAliasType do DataType := DataType^.DataType;
+  IsIR4ScalarType := (DataType = dtInteger) or (DataType = dtReal) or
+                     (DataType^.Kind = scPointerType) or
+                     ((DataType^.Kind = scSubrangeType) and (DataType^.IrI > 0));
+end;
+
+function IsIR4IntType(DataType: PSymbol): Boolean;
+begin
+  while (DataType <> nil) and (DataType^.Kind = scAliasType) do
+    DataType := DataType^.DataType;
+  IsIR4IntType := (DataType = dtInteger) or
+                  ((DataType <> nil) and (DataType^.Kind = scSubrangeType) and (DataType^.IrI > 0));
+end;
+
+function AllocIR4TempTuple(C, I, A, F: Integer): String;
+var
+  Cur: TIR4Tuple;
+begin
+  Cur := IR4Frame;
+  Inc(IR4Frame.C, C);
+  Inc(IR4Frame.I, I);
+  Inc(IR4Frame.A, A);
+  Inc(IR4Frame.F, F);
+  if IR4Frame.C > IR4MaxFrame.C then IR4MaxFrame.C := IR4Frame.C;
+  if IR4Frame.I > IR4MaxFrame.I then IR4MaxFrame.I := IR4Frame.I;
+  if IR4Frame.A > IR4MaxFrame.A then IR4MaxFrame.A := IR4Frame.A;
+  if IR4Frame.F > IR4MaxFrame.F then IR4MaxFrame.F := IR4Frame.F;
+  if (Cur.C = 0) and (Cur.I = 0) and (Cur.A = 0) and (Cur.F = 0) then
+    AllocIR4TempTuple := '_locals'
+  else
+    AllocIR4TempTuple := '_locals ' + IR4TupleExprStr(Cur.C, Cur.I, Cur.A, Cur.F) + ' a+';
+end;
+
+function AllocIR4Temp(Size: Integer): String;
+begin
+  AllocIR4Temp := AllocIR4TempTuple(Size, 0, 0, 0);
+end;
+
+procedure Emit;
+begin
+  if Muted > 0 then Exit;
+  if (Tag = '') and (Instruction = '') and (Comment <> '') then
+  begin
+    if IR4LineOpen then begin IR4OutLn(''); IR4LineOpen := False; end;
+    IR4OutLn('\ ' + Comment);
+    Exit;
+  end;
+  if Tag <> '' then
+  begin
+    if IR4LineOpen then begin IR4OutLn(''); IR4LineOpen := False; end;
+    IR4OutLn(':: ' + Tag);
+  end;
+  if Instruction <> '' then
+  begin
+    if (Copy(Instruction, 1, 3) = 'fn ') or
+       (Copy(Instruction, 1, 4) = 'fwd ') or
+       (Copy(Instruction, 1, 4) = 'var ') or
+       (Copy(Instruction, 1, 5) = 'data ') or
+       (Copy(Instruction, 1, 6) = 'const ') or
+       (Copy(Instruction, 1, 8) = 'require ') or
+       (Instruction = 'init') or
+       (Instruction = 'end') then
+    begin
+      if IR4LineOpen then begin IR4OutLn(''); IR4LineOpen := False; end;
+      IR4OutLn(Instruction);
+    end
+    else
+    begin
+      if not IR4LineOpen then
+      begin
+        IR4Out('  ' + Instruction);
+        IR4LineOpen := True;
+      end
+      else
+        IR4Out(' ' + Instruction);
+      if Comment <> '' then
+      begin
+        IR4OutLn(' \ ' + Comment);
+        IR4LineOpen := False;
+      end;
+    end;
+  end
+  else if (Tag = '') and (Comment = '') then
+  begin
+    if IR4LineOpen then begin IR4OutLn(''); IR4LineOpen := False; end;
+    IR4OutLn('');
   end;
 end;
 
 procedure SetLibrary;
 begin
-  if (Source <> nil) and IsRelative(FileName) then
-    FileName := ParentDir(FAbsolute(Source^.Name)) + '/' + FileName;
-
-  Flush;
-  Emit0('', 'include "' + FileName + '"', '');
-end;
-
-function DoOptimize: Boolean;
-var
-  Op1, Op2, S: String;
-  Prev: PCode;
-begin
-  (* Try to eliminate the most embarrassing generated instruction pairs. *)
-
-  DoOptimize := True;
-
-  if (Code <> nil) then
+  if LowerStr(Copy(FileName, Length(FileName) - 3, 4)) = '.ir4' then
   begin
-    Prev := Code^.Prev;
-    if Prev = nil then
-    begin
-      DoOptimize := False;
-      Exit;
-    end;
-
-    if StartsWith(Prev^.Instruction, 'db ') and StartsWith(Code^.Instruction, 'db ') then
-      // Ensure merged lines are String[255]-safe and readable.
-      if Length(Prev^.Instruction) + Length(Code^.Instruction) <= 80 then
-      begin
-        Prev^.Instruction := Prev^.Instruction + ',' + Copy(Code^.Instruction, 4, 255);
-        RemoveCode;
-        Exit;
-      end;
-
-    if StartsWith(Prev^.Instruction, 'dw ') and StartsWith(Code^.Instruction, 'dw ') then
-      // Ensure merged lines are String[255]-safe and readable.
-      if Length(Prev^.Instruction) + Length(Code^.Instruction) <= 80 then
-      begin
-        Prev^.Instruction := Prev^.Instruction + ',' + Copy(Code^.Instruction, 4, 255);
-        RemoveCode;
-        Exit;
-      end;
-
-    if StartsWith(Prev^.Instruction, 'push ') and StartsWith(Code^.Instruction, 'pop ') then
-    begin
-      Op1 := Copy(Prev^.Instruction, 6, 255);
-      Op2 := Copy(Code^.Instruction, 5, 255);
-
-      if Op1 = Op2 then
-      begin
-        RemoveCode;
-        RemoveCode;
-        Exit;
-      end;
-
-      if (Op1 <> 'af') and (Op2 <> 'af') then
-      begin
-        if (Op1 = 'de') and (Op2 = 'hl') or (Op1 = 'hl') and (Op2 = 'de') then
-          Prev^.Instruction := 'ex de,hl'
-        else
-          Prev^.Instruction := 'ld ' + Op2 + ',' + Op1;
-        RemoveCode;
-        Exit;
-      end
-      // else if (Op1 = 'hl') and (Op2 = 'af') then
-      // begin
-      //   RemoveCode;
-      //   RemoveCode;
-      //   Code^.Instruction := 'ccf';
-      //   Code^.Prev.Instruction := 'dec a';
-      //   Exit;
-      // end;
-    end;
-
-    if (Prev^.Instruction = 'pushfp') and (Code^.Instruction = 'popfp') then
-    begin
-      RemoveCode;
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'ex de,hl') and (Prev^.Instruction = 'ex de,hl') then
-    begin
-      RemoveCode;
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Prev^.Instruction = 'ld l,a') and (Code^.Instruction = 'bit 0,l') then
-    begin
-      if (Prev^.Prev <> nil) and (Prev^.Prev^.Instruction = 'ld h,0') then
-      begin
-        RemoveCode;
-        RemoveCode;
-        Code^.Instruction := 'and a';
-        Exit;
-      end;
-    end;
-
-    if (Code^.Instruction = '') and (Code^.Comment <> '') and StartsWith(Prev^.Instruction, 'push') then
-    begin
-      Code^.Instruction := Prev^.Instruction;
-      Prev^.Instruction := '';
-
-      Prev^.Comment := Code^.Comment;
-      Code^.Comment := '';
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'ld bc,de') and StartsWith(Prev^.Instruction, 'ld de,') then
-    begin
-      RemoveCode;
-      Code^.Instruction := 'ld bc,' + Copy(Code^.Instruction, 7, 255);
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'ld bc,hl') and (Prev^.Instruction = 'ld l,a') then
-    begin
-      if (Prev^.Prev <> nil) and (Prev^.Prev^.Instruction = 'ld h,0') then
-      begin
-        RemoveCode;
-        RemoveCode;
-        Code^.Instruction := 'ld c,a';
-        Exit;
-      end;
-    end;
-
-    if (Code^.Instruction = 'add hl,de') and (Prev^.Instruction = 'ld de,2') then
-    begin
-      Prev^.Instruction := 'inc hl';
-      Code^.Instruction := 'inc hl';
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'add hl,de') and (Prev^.Instruction = 'ld de,1') then
-    begin
-      Prev^.Instruction := 'inc hl';
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'add hl,de') and (Prev^.Instruction = 'ld de,0') then
-    begin
-      RemoveCode;
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'add hl,de') and (Prev^.Instruction = 'ld de,-1') then
-    begin
-      Prev^.Instruction := 'dec hl';
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'add hl,de') and (Prev^.Instruction = 'ld de,-2') then
-    begin
-      Prev^.Instruction := 'dec hl';
-      Code^.Instruction := 'dec hl';
-      Exit;
-    end;
-
-    (* --- for later ---
-    if (Code^.Instruction = 'ld (hl),de') and StartsWith(Prev^.Instruction, 'ld de,') and (StartsWith(Prev^.Prev^.Instruction, 'ld hl,global')) then
-    begin
-
-      Addr := Copy(Prev^.Prev^.Instruction, 7, 255);
-
-      Prev^.Prev^.Instruction := '';
-      Code^.Instruction := 'ld (' + Addr + '),de';
-      WriteLn('--> ', Code^.Instruction);
-
-      Exit;
-    end;
-    *)
-
-    if (Code^.Instruction = 'ld a,e') and StartsWith(Prev^.Instruction, 'ld de,') then
-    begin
-      RemoveCode;
-      Code^.Instruction := 'ld a,' + Copy(Code^.Instruction, 7, 255);
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'ex de,hl') and StartsWith(Prev^.Instruction, 'ld de,') then
-    begin
-      if IsDecDigit(Prev^.Instruction[7]) then
-      begin
-        Prev^.Instruction := 'ld hl,' + Copy(Prev^.Instruction, 7, 255);
-        RemoveCode;
-        Exit;
-      end;
-    end;
-
-    if (Code^.Instruction = 'ld de,(hl)') and StartsWith(Prev^.Instruction, 'ld hl,') then
-    begin
-      Prev^.Instruction := 'ld hl,(' + Copy(Prev^.Instruction, 7, 255) + ')';
-      Code^.Instruction := 'ex de,hl';
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'pop hl') and StartsWith(Prev^.Instruction, 'ld de,') then
-    begin
-      if (Prev^.Prev <> nil) and (Prev^.Prev^.Instruction = 'push hl') then
-      begin
-        Prev^.Prev^.Instruction := Prev^.Instruction;
-        Prev^.Instruction := 'push hl';
-        Exit;
-      end;
-    end;
-
-    if (Code^.Instruction = 'pop de') and StartsWith(Prev^.Instruction, 'ld hl,') and (Prev^.Prev^.Instruction = 'push de') then
-    begin
-      Prev^.Prev^.Instruction := Prev^.Instruction;
-      RemoveCode;
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'pop hl') and StartsWith(Prev^.Instruction, 'ld de,') then
-    begin
-      if (Prev^.Prev <> nil) and (Prev^.Prev^.Instruction = 'push de') then
-      begin
-        Prev^.Prev^.Instruction := 'ex de,hl';
-        RemoveCode;
-
-        if Prev^.Prev^.Prev <> nil then
-        begin
-          S := Prev^.Prev^.Prev^.Instruction;
-
-          if S = 'ex de,hl' then
-          begin
-            Prev^.Prev^.Prev^.Instruction := '';
-            Prev^.Prev^.Instruction := '';
-          end
-          else if StartsWith(S, 'ld de,') and IsDecDigit(S[7]) then
-          begin
-            Prev^.Prev^.Prev^.Instruction := 'ld hl,' + Copy(S, 7, 255);
-            Prev^.Prev^.Instruction := '';
-          end;
-        end;
-
-        Exit;
-      end;
-    end;
-
-    if (Code^.Instruction = 'call __int16_eq') and (Prev^.Instruction = 'ld de,0') then
-    begin
-      Prev^.Instruction := 'call __int16_eq0';
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'call __int16_neq') and (Prev^.Instruction = 'ld de,0') then
-    begin
-      Prev^.Instruction := 'call __int16_neq0';
-      RemoveCode;
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'call __int_shl') and (Prev^.Instruction = 'ld de,8') then
-    begin
-      Prev^.Instruction := 'ld h,l';
-      Code^.Instruction := 'ld l,0';
-      Exit;
-    end;
-
-    if (Code^.Instruction = 'call __int_shr') and (Prev^.Instruction = 'ld de,8') then
-    begin
-      Prev^.Instruction := 'ld l,h';
-      Code^.Instruction := 'ld h,0';
-      Exit;
-    end;
-
-  end;
-
-  DoOptimize := False;
-end;
-
-procedure Emit(Tag, Instruction, Comment: String);
-begin
-  if Muted > 0 then Exit;
-
-  if not Optimize then
-  begin
-    Emit0(Tag, Instruction, Comment);
+    Emit('', 'require "' + FileName + '"', '');
     Exit;
   end;
-
-  if Tag <> '' then
-    Flush;
-
-  AppendCode(Tag, Instruction, Comment);
-
-  while DoOptimize do
-  begin
-  end;
+  Error('Assembly include not supported in IR4 mode: ' + FileName);
 end;
 
-procedure EmitI(S: String);
+procedure EmitI;
 begin
   Emit('', S, '');
 end;
 
-procedure EmitC(S: String);
+procedure EmitC;
 begin
   Emit('', '', S)
   //Flush;
@@ -3079,82 +2304,15 @@ end;
 
 procedure EmitInclude(S: String);
 begin
-  EmitI('include "' +  S + '"');
+  if LowerStr(Copy(S, Length(S) - 3, 4)) = '.ir4' then
+    EmitI('require "' + S + '"')
+  else
+    Error('Assembly include not supported in IR4 mode: ' + S);
 end;
 
-procedure EmitClear(Bytes: Integer); forward;
-
 procedure EmitCall(Sym: PSymbol);
-var
-  I, J, K: Integer;
 begin
-  with Sym^ do
-    if SmartLink and (Level = 0) and not IsExternal and not IsMagic then
-      AddDependency(CurrentBlock, Sym);
-
-  if not Sym^.IsStdCall then
-  begin
-    (* This is a bit broken. Checks should probably be done when parsing the
-       signatures. Also, what happens if we don't have enough (or the right)
-       registers for all parameters? *)
-    if (Sym^.Value = 1) and (Sym^.ArgTypes[0] = dtReal) then
-      EmitI('popfp')
-    else
-    begin
-      if Sym^.Value >= 3 then
-        EmitI('pop bc');
-      if Sym^.Value >= 2 then
-        EmitI('pop de');
-      if Sym^.Value >= 1 then
-        EmitI('pop hl');
-    end;
-  end;
-
-  if (Sym^.Level = 0) and Sym^.Banked and not (Banked and (CurrentBank = Sym^.BankNo)) then
-  begin
-    //WriteLn('Emitting call to ', Sym^.Name, ' in bank ', Sym^.BankNo);
-    EmitI('ld a,' + IntToStr(Sym^.BankNo));
-    EmitI('ld hl,' + Sym^.Tag);
-    EmitI('call farcall');
-  end
-  else
-    EmitI('call ' + Sym^.Tag);
-
-  if not Sym^.IsStdCall then
-  begin
-    if Sym^.Kind = scFunc then
-    begin
-      if Sym^.DataType = dtReal then
-        EmitI('pushfp')
-      else
-        EmitI('push hl');
-    end;
-  end
-  else
-  begin
-    K := 0;
-    for I := 0 to Sym^.Value - 1 do
-    begin
-      if Sym^.ArgIsRef[I] then J := 2 else
-      begin
-        (* __loadstr always reserves 256 bytes on the stack regardless of the
-           declared string length, so cleanup must always free 256 bytes for
-           string value parameters — not just DataType^.Value (= N+1). *)
-        if Sym^.ArgTypes[I]^.Kind = scStringType then J := 256 else
-        begin
-          J := Sym^.ArgTypes[I]^.Value;
-          if J < 2 then J := 2;
-        end;
-      end;
-      K:= K + J;
-    end;
-
-    if K <> 0 then
-    begin
-      EmitC('Post call cleanup ' + IntToStr(K) + ' bytes');
-      EmitClear(K);
-    end;
-  end;
+  EmitI(Sym^.Tag);
 end;
 
 (**
@@ -3162,319 +2320,21 @@ end;
  *)
 procedure EmitHeader(Home: String; SrcFile: String);
 begin
-  EmitC('');
-  EmitC('program ' + SrcFile);
-  EmitC('');
-
-  EmitI('if __SJASMPLUS__ < 0x011600');
-  EmitI('LUA');
-  EmitI('local ok, v = pcall(sj.get_define, "__VERSION__")');
-  EmitI('v = ok and v and v:gsub("\"", "") or "unknown"');
-  EmitI('print("Warning: sjasmplus 1.22.0 recommended, you have " .. v .. ".\n")');
-  EmitI('ENDLUA');
-  EmitI('endif');
-
   SetDefine('PASTA', True);
-
-  case Binary of
-    btAgon:   begin
-                SetDefine('CPU_EZ80', True);
-                SetDefine('SYS_AGON', True);
-                EmitI('defdevice AGON,$2000,136');
-                EmitI('device AGON');
-              end;
-
-    btCPM:    begin
-                SetDefine('CPU_Z80', True);
-                SetDefine('SYS_CPM', True);
-                EmitI('device NOSLOT64K');
-              end;
-
-    btZX:    begin
-                SetDefine('CPU_Z80', True);
-                SetDefine('SYS_ZX', True);
-                SetDefine('SYS_ZX48', True);
-                EmitI('device ZXSPECTRUM48, $' + IntToHex(AddrOrigin - 1, 4));
-              end;
-
-    btZX128:  begin
-                SetDefine('CPU_Z80', True);
-                SetDefine('SYS_ZX', True);
-                SetDefine('SYS_ZX128', True);
-                EmitI('device ZXSPECTRUM128, $' + IntToHex(AddrOrigin - 1, 4));
-              end;
-
-    btZXN:    begin
-                SetDefine('CPU_Z80N', True);
-                SetDefine('SYS_ZX', True);
-                SetDefine('SYS_ZXNEXT', True);
-                EmitI('device ZXSPECTRUMNEXT');
-              end;
-  end;
-
-  (* Defines that mirror a command line switch carry an OPT_ prefix. User code
-   * sets defines through the same namespace (see the $define directive), and
-   * the RTL reacts to these in its own $ifdefs, so a plain name like PRINTER
-   * would silently change what the RTL does the moment someone happens to use
-   * it for their own purposes. *)
-
-  if UsePrinter then SetDefine('OPT_PRINTER', True);
-  if Release then SetDefine('OPT_RELEASE', True);
-
-  EmitI('org $' + IntToHex(AddrOrigin, 4));
-  Emit('TEXT', 'jp __init', '');
-
-  if Binary in [btZX128, btZXN] then
-    Emit('numpages', 'db 0', 'Number of overlay pages');
-end;
-
-(**
- * Returns the BASIC loader that goes in front of the code on the ZX targets:
- * the one given with --loader, or else the stock one matching the target.
- * Only the tape and runnable-directory formats carry a loader at all; the
- * others never ask.
- *)
-function LoaderPath: String;
-begin
-  if LoaderFile <> '' then
-    LoaderPath := LoaderFile
-  else if Binary = btZXN then
-    LoaderPath := HomeDir + '/misc/specnext.bas'
-  else if Binary = btZX128 then
-    LoaderPath := HomeDir + '/misc/spec128.bas'
-  else
-    LoaderPath := HomeDir + '/misc/spec48.bas';
+  SetDefine('SYS_IR4', True);
+  EmitC('program ' + SrcFile);
+  EmitI('require "system_p.ir4"');
+  EmitI('');
 end;
 
 (**
  * Emits the file footer.
  *)
-procedure EmitFooter(BinFile: String);
-var
-  BinFile2, Loader: String;
-  I, Is128K: Integer;
-
-  (**
-   * Helper that emits the instructions necessary for writing the ZX overlays
-   * regardless of the chosen file format (because of the shared logic).
-   *)
-  procedure WriteZXOverlays(BaseName: String);
-  var
-    OvrIdx, OvrStr, OvrOff, OvrLen: String;
-    I: Integer;
-  begin
-    for I := 0 to CurrentOverlay - 1 do
-    begin
-      if Binary = btZXN then
-      begin
-        EmitI('slot 7');
-        EmitI('page ' + IntToStr(I + 32));
-      end
-      else
-      begin
-        EmitI('slot 3');
-        EmitI('page ' + IntToStr(ToastrackBanks[I]));
-      end;
-
-      OvrIdx := IntToStr(I);
-      OvrStr := Copy('00', Length(OvrIdx), 2) + OvrIdx;
-      OvrOff := 'OVR_' + OvrIdx + '_START';
-      OvrLen := 'OVR_' + OvrIdx + '_END - ' + OvrOff;
-
-      if Format = tfTape then
-        EmitI('savetap "' + BaseName + '",CODE,"' + OvrStr + '",' + OvrOff + ',' + OvrLen)
-      else if Format = tfBinary then
-        EmitI('savebin "' + BaseName + '.' + OvrStr + '",' + OvrOff + ',' + OvrLen)
-      else if Format = tfPlus3Dos then
-        EmitI('save3dos "' + BaseName + '.' + OvrStr + '",' + OvrOff + ',' + OvrLen + ',3,' + OvrOff)
-      else if Format = tfRunDir then
-        EmitI('save3dos "' + BaseName + '/' + OvrStr + '",' + OvrOff + ',' + OvrLen + ',3,' + OvrOff)
-      else
-        Error('Overlays not allowed for this format. How did you get here?');
-    end;
-  end;
-
+procedure EmitFooter;
 begin
-  if (Binary = btAgon) and (CurrentOverlay <> 0) then
-    Emit('ovl_name', 'db "' + ChangeExt(NameOnly(BinFile), '.ovr') + '",0', '');
-
-  Emit('HEAP', '= $', '');
-  EmitI('dw 0');           (* Initial free block: Next = nil *)
-  EmitI('dw STACK-HEAP');  (* Initial free block: Size = STACK - HEAP *)
-  Emit('TEXT_END', '= $', '');
-  Emit('STACK', '= $' + IntToHex(AddrLimit - StackSize, 4), '');
-  EmitI('if HEAP + 32767 < STACK');
-  Emit('STACK', '= HEAP + 32767', '');
-  EmitI('endif');
-
-  EmitC('');
-  EmitC('end');
-  EmitC('');
-
-  BinFile2 := PosixToNative(BinFile);
-
-  EmitI('LUA');
-  EmitI('if sj.calc("__ERRORS__") ~= 0 then print() end');
-
-  EmitI('SegInfo("Program",sj.calc("TEXT"),sj.calc("HEAP"),sj.calc("STACK-TEXT"), "")');
-  EmitI('SegInfo("Heap",sj.calc("HEAP"),sj.calc("STACK"), 32767, "")');
-  EmitI('SegInfo("Stack",sj.calc("STACK"),sj.calc("LIMIT"),65535, "")');
-
-  if CurrentOverlay <> 0 then
-  begin
-    EmitI('print()');
-
-    Is128K := Ord(Binary = btZX128);
-    if Binary = btAgon then Is128K := 2;
-
-    for I := 0 to CurrentOverlay - 1 do
-      EmitI('OvrInfo("' + IntToStr(I) + '",' + IntToStr(Is128K) + ')');
-  end;
-
-  EmitI('if sj.calc("HEAP")>sj.calc("STACK") then print() error("\nProgram too large.") end');
-  EmitI('if sj.calc("__ERRORS__") ~= 0 then sj.exit() end');
-
-  EmitI('ENDLUA');
-
-  if Binary = btZX128 then
-  begin
-    EmitI('slot 3');
-    EmitI('page 0');
-    EmitI('org 23388');
-    EmitI('db 16');
-  end;
-
-  if (Binary = btZX128) or (Binary = btZXN) then
-  begin
-    EmitI('org numpages');
-    EmitI('db ' + IntToStr(CurrentOverlay));
-  end;
-
-  if Binary = btCPM then
-    EmitI('savebin "' + BinFile + '",$0100,TEXT_END-$0100')
-  else if Binary = btAgon then
-  begin
-    EmitI('savebin "' + BinFile + '",$0000,TEXT_END');
-    if CurrentOverlay <> 0 then
-      EmitI('savedev "' + ChangeExt(BinFile, '.ovr') + '",8,0,' + IntToStr(CurrentOverlay * 8192))
-    else
-  end
-  else if Format = tfBinary then
-  begin
-    EmitI('savebin "' + BinFile + '",TEXT,TEXT_END-TEXT');
-    WriteZXOverlays(ChangeExt(BinFile, ''))
-  end
-  else if Format = tfPlus3Dos then
-  begin
-    EmitI('save3dos "' + BinFile + '",TEXT,TEXT_END-TEXT,3,TEXT');
-    WriteZXOverlays(ChangeExt(BinFile, ''))
-  end
-  else if Format = tfTape then
-  begin
-    EmitI('emptytap "' + BinFile2 + '"');
-
-    EmitI('org 0');
-
-    Loader := LoaderPath;
-
-    if CustomOrigin <> 0 then
-    begin
-      Loader := ChangeExt(AsmFile, '.ldr');
-      if not CopyFile(LoaderPath, Loader)
-        or not PatchLoader(Loader, AddrOrigin - 1) then
-          Error('Cannot prepare loader');
-    end;
-
-    EmitI('incbin "' + PosixToNative(Loader) + '"');
-
-    EmitI('savetap "' + BinFile2 + '",BASIC,"run.bas",$0080,$-$0080,0');
-    EmitI('savetap "' + BinFile2 + '",CODE,"bin",TEXT,TEXT_END-TEXT');
-    WriteZXOverlays(BinFile2);
-  end
-  else if Format = tfRunDir then
-  begin
-    {$i-}
-    MkDir(BinFile);
-    IOResult;
-    CleanDir(BinFile);
-    {$i+}
-
-    CopyFile(LoaderPath, BinFile + '/run.bas');
-    if (CustomOrigin <> 0)
-      and not PatchLoader(BinFile + '/run.bas', AddrOrigin - 1) then
-        Error('Cannot prepare loader');
-    EmitI('save3dos "' + BinFile + '/bin",TEXT,TEXT_END-TEXT,3,TEXT');
-    WriteZXOverlays(BinFile + '/');
-  end
-  else if Format = tfSnapshot then
-    EmitI('savesna "' + BinFile + '",TEXT');
-
-  if (Binary in [btZX, btZX128]) and not Release then
-      EmitI('.BPLIST "' + ChangeExt(BinFile, '.brk') + '" fuse');
-end;
-
-(**
- * Collects (textual) info about all variables from the given symbol to the most
- * recent scope marker, so they can be added to the generated assembly.
- *)
-procedure CollectVars(Sym: PSymbol; var S: String);
-begin
-  if Sym^.Kind <> scScope then CollectVars(Sym^.Prev, S);
-
-  if Sym^.Kind = scVar then
-  begin
-    if S <> '' then S := S + ', ' + Sym^.Name else S := Sym^.Name;
-    S := S + '(';
-    if Sym^.Tag <> '' then
-      S := S + '@' + Sym^.Tag + ')'
-    else
-    begin
-    if Sym^.Value > 0 then S := S + '+';
-    S := S + IntToStr(Sym^.Value) + ')';
-    end;
-  end;
-end;
-
-(**
- * Encodes the given Pascal string so that the assembler will accept it in a db
- * statement. Mostly escaping of problematic characters.
- *)
-function EncodeAsmStr(const S: String): String;
-var
-  T: String;
-  Quotes: Boolean;
-  I: Integer;
-  C: Char;
-begin
-  T := IntToStr(Length(S));
-  Quotes := False;
-
-  for I := 1 to Length(S) do
-  begin
-    C := S[I];
-    if (C < ' ') or (C > '~') or (C = '"') or (C = '´') or (C = '\') then
-    begin
-      if Quotes then
-      begin
-        T := T + '"';
-        Quotes := False;
-      end;
-      T := T + ',' + IntToStr(Ord(C));
-    end
-    else
-    begin
-      if not Quotes then
-      begin
-        T := T + ',"';
-        Quotes := True;
-      end;
-      T := T + C;
-    end;
-  end;
-
-  if Quotes then T := T + '"';
-
-  EncodeAsmStr := T;
+  if IR4LineOpen then begin IR4OutLn(''); IR4LineOpen := False; end;
+  IR4Buffering := False;
+  FlushIR4Chunks;
 end;
 
 (**
@@ -3483,24 +2343,60 @@ end;
  * Called once after each overlay (with the value of the list pointer immediately
  * before the overlay) and once at the end of the whole program (with nil).
  *)
+function EncodeIR4Str((* const *) S: String): String;
+var
+  T: String;
+  I: Integer;
+  C: Char;
+  InQ: Boolean;
+begin
+  if Length(S) = 0 then
+  begin
+    EncodeIR4Str := '0 :i8 0 :i8';
+    Exit;
+  end;
+  T := IntToStr(Length(S)) + ' :i8';
+  InQ := False;
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+    if (C >= #32) and (C <= #126) then
+    begin
+      if not InQ then begin T := T + ' "'; InQ := True; end;
+      if C = '"' then T := T + '\"'
+      else if C = '\' then T := T + '\\'
+      else T := T + C;
+    end
+    else
+    begin
+      if InQ then begin T := T + '"'; InQ := False; end;
+      if C = #10 then T := T + ' "\n"'
+      else if C = #13 then T := T + ' "\r"'
+      else if C = #9 then T := T + ' "\t"'
+      else T := T + ' ' + IntToStr(Ord(C)) + ' :i8';
+    end;
+  end;
+  if InQ then T := T + '"';
+  EncodeIR4Str := T + ' 0 :i8';
+end;
+
 procedure EmitStrings(Stop: PStringLiteral);
 var
   Temp: PStringLiteral;
 begin
   while Strings <> Stop do
   begin
-    EmitC('');
-    Emit(Strings^.Tag, 'db ' + EncodeAsmStr(Strings^.Value), '');
+    EmitI('data ' + Strings^.Tag);
+    EmitI(EncodeIR4Str(Strings^.Value));
+    EmitI('end');
     Temp := Strings^.Next;
     Dispose(Strings);
     Strings := Temp;
   end;
 end;
 
-procedure EmitSpace(Bytes: Integer); forward;
-
 (*
- * Emits the prologue for a procedure or function that uses the standard
+ * Emits the prologue for a procedure or function.
  * calling convention. The stack frame looks like this:
  *
  * +------------------+
@@ -3523,63 +2419,88 @@ procedure EmitSpace(Bytes: Integer); forward;
  *)
 procedure EmitPrologue(Sym: PSymbol);
 var
-  V: String;
+  Sig, LAddr: String;
+  P: PSymbol;
+  I, ParamIdx: Integer;
+  Params: array[0..15] of PSymbol;
+  ParamCount: Integer;
 begin
-  V := '';
-  CollectVars(SymbolTable, V);
-  if V <> '' then
-  begin
-    EmitC('var ' + V);
-    EmitC('');
-  end;
-
   if Sym = Nil then
   begin
-    Emit('main', '', '');
-    EmitI('ld (display),sp');
-    if CurrentOverlay <> 0 then
-    begin
-      (* Overlays are only known to be in use at this point, so the reset of
-       * the overlay state on a ZX (re)start via USR lives here, not in
-       * __init. *)
-      if Binary in [btZX128, btZXN] then
-      begin
-        EmitI('ld hl,mystack+64');
-        EmitI('ld (localsp),hl');
-        EmitI('ld a,$ff');
-        EmitI('ld (curpage),a');
-      end;
+    IR4Frame.C := 0; IR4Frame.I := 0; IR4Frame.A := 0; IR4Frame.F := 0;
+    IR4BaseFrame := IR4Frame;
+    IR4MaxFrame := IR4Frame;
+    IR4FnSig := 'fn main ( -> :i )';
+    IR4Buffering := True;
+    Exit;
+  end;
 
-      if Binary = btZX128 then
-      begin
-        EmitI('ld a,0');
-        EmitI('call banksel');
-      end
-      else if Binary = btZXN then
-      begin
-        EmitI('ld a,32');
-        EmitI('call banksel');
-      end
-      else if Binary = btAgon then
-      begin
-        EmitI('call overload');
-        EmitI('ld a,8');
-        EmitI('call banksel');
-      end;
-    end;
-  end
-  else
+  ParamCount := 0;
+  P := SymbolTable;
+  while (P <> nil) and (P <> Sym) do
   begin
-    Emit(Sym^.Tag, '', 'Prologue');
-    EmitI('ld hl,(display+' + IntToStr(Level * 2) + ')');
-    EmitI('push hl');
+    if (P^.Kind = scVar) and (P^.Tag <> 'RESULT') and P^.IsParam and (ParamCount < 16) then
+    begin
+      Params[ParamCount] := P;
+      Inc(ParamCount);
+    end;
+    P := P^.Prev;
+  end;
 
-    EmitI('ld (display+' + IntToStr(Level * 2) + '),sp');
+  IR4BaseFrame := IR4Frame;
+  IR4MaxFrame := IR4Frame;
+  Sig := 'fn ' + Sym^.Tag + ' (';
+  for I := ParamCount - 1 downto 0 do
+  begin
+    ParamIdx := ParamCount - 1 - I;
+    if Params[I]^.DataType = dtReal then
+      Sig := Sig + ' p' + IntToStr(ParamIdx) + ' :f'
+    else if (Params[I]^.DataType^.Kind in [scPointerType, scStringType, scSetType, scArrayType, scRecordType]) or Params[I]^.IsRef then
+      Sig := Sig + ' p' + IntToStr(ParamIdx) + ' :a'
+    else
+      Sig := Sig + ' p' + IntToStr(ParamIdx) + ' :i';
+  end;
+  if (Sym^.Kind = scFunc) and (Sym^.DataType^.Kind in [scStringType, scSetType, scArrayType, scRecordType]) then
+    Sig := Sig + ' p_sret :a';
+  if Sym^.Kind = scFunc then
+  begin
+    if Sym^.DataType = dtReal then
+      Sig := Sig + ' -> :f'
+    else if Sym^.DataType^.Kind in [scPointerType, scStringType, scSetType, scArrayType, scRecordType] then
+      Sig := Sig + ' -> :a'
+    else
+      Sig := Sig + ' -> :i';
+  end;
+  Sig := Sig + ' )';
+  IR4FnSig := Sig;
+  IR4Buffering := True;
 
-    EmitSpace(-Offset);
+  if Sym^.Level < 7 then
+  begin
+    EmitI('__display ' + IntToStr(Sym^.Level + 1) + ' size_a * a+ a@ _locals a!');
+    EmitI('_locals __display ' + IntToStr(Sym^.Level + 1) + ' size_a * a+ a!');
+  end;
 
-    if StackMode then
-      EmitCall(LookupBuiltInOrFail('CheckStack'));
+  for I := ParamCount - 1 downto 0 do
+  begin
+    ParamIdx := ParamCount - 1 - I;
+    LAddr := '_locals';
+    if (Params[I]^.IrC <> 0) or (Params[I]^.IrI <> 0) or (Params[I]^.IrA <> 0) or (Params[I]^.IrF <> 0) then
+      LAddr := '_locals ' + IR4TupleExprStr(Params[I]^.IrC, Params[I]^.IrI, Params[I]^.IrA, Params[I]^.IrF) + ' a+';
+    if (Params[I]^.DataType^.Kind = scStringType) and not Params[I]^.IsRef then
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' ' + IntToStr(Params[I]^.DataType^.Value - 1) + ' pas_strcopy_clamp drop')
+    else if (Params[I]^.DataType^.Kind = scSetType) and not Params[I]^.IsRef then
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' 32 memcpy')
+    else if (Params[I]^.DataType^.Kind in [scArrayType, scRecordType]) and not Params[I]^.IsRef then
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' ' + IR4TupleExprStr(Params[I]^.DataType^.IrC, Params[I]^.DataType^.IrI, Params[I]^.DataType^.IrA, Params[I]^.DataType^.IrF) + ' memcpy')
+    else if (Params[I]^.DataType^.Kind = scPointerType) or Params[I]^.IsRef then
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' swap a!')
+    else if Params[I]^.DataType = dtReal then
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' swap f!')
+    else if IsIR4IntType(Params[I]^.DataType) then
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' swap !')
+    else
+      EmitI(LAddr + ' p' + IntToStr(ParamIdx) + ' swap i8!');
   end;
 end;
 
@@ -3588,16 +2509,55 @@ end;
  * convention. Restores the old frame pointer.
  *)
 procedure EmitEpilogue(Sym: PSymbol);
+var
+  P: PSymbol;
+  Total: Integer;
+  RAddr: String;
 begin
-  if Sym <> nil then
+  Emit(ExitTarget, '', '');
+  if Sym = nil then
+    EmitI('__exitcode')
+  else
   begin
-    Emit(ExitTarget, 'ld sp,(display+' + IntToStr(Level * 2) + ')', 'Epilogue');
-
-    EmitI('pop hl');
-    EmitI('ld (display+' + IntToStr(Level * 2) + '),hl');
+    if Sym^.Kind = scFunc then
+    begin
+      P := SymbolTable;
+      while (P <> nil) and ((P^.Kind <> scVar) or (P^.Tag <> 'RESULT')) do
+        P := P^.Prev;
+      if P <> nil then
+      begin
+        RAddr := '_locals';
+        if (P^.IrC <> 0) or (P^.IrI <> 0) or (P^.IrA <> 0) or (P^.IrF <> 0) then
+          RAddr := '_locals ' + IR4TupleExprStr(P^.IrC, P^.IrI, P^.IrA, P^.IrF) + ' a+';
+        if P^.DataType = dtReal then
+          EmitI(RAddr + ' f@')
+        else if P^.DataType^.Kind = scStringType then
+          EmitI('p_sret ' + RAddr + ' ' + IntToStr(P^.DataType^.Value - 1) + ' pas_strcopy_clamp drop p_sret')
+        else if P^.DataType^.Kind = scSetType then
+          EmitI('p_sret ' + RAddr + ' 32 memcpy p_sret')
+        else if P^.DataType^.Kind in [scArrayType, scRecordType] then
+          EmitI('p_sret ' + RAddr + ' ' + IR4TupleExprStr(P^.DataType^.IrC, P^.DataType^.IrI, P^.DataType^.IrA, P^.DataType^.IrF) + ' memcpy p_sret')
+        else if P^.DataType^.Kind = scPointerType then
+          EmitI(RAddr + ' a@')
+        else if IsIR4IntType(P^.DataType) then
+          EmitI(RAddr + ' @')
+        else
+          EmitI(RAddr + ' u8@');
+      end;
+    end;
+    if Sym^.Level < 7 then
+      EmitI('_locals a@ __display ' + IntToStr(Sym^.Level + 1) + ' size_a * a+ a!');
   end;
-
-  EmitI('ret');
+  EmitI('end');
+  IR4Buffering := False;
+  EmitStrings(nil);
+  IR4OutLn(IR4FnSig);
+  if (IR4MaxFrame.C <> 0) or (IR4MaxFrame.I <> 0) or (IR4MaxFrame.A <> 0) or (IR4MaxFrame.F <> 0) then
+  begin
+    Total := IR4MaxBytes(IR4MaxFrame.C, IR4MaxFrame.I, IR4MaxFrame.A, IR4MaxFrame.F);
+    IR4OutLn('  var _locals :bytes ' + IntToStr(Total));
+  end;
+  FlushIR4Chunks;
 end;
 
 (**
@@ -3609,43 +2569,30 @@ procedure EmitAddress(Sym: PSymbol);
 begin
   with Sym^ do
   begin
-    if (Tag <> '') and (Tag <> 'RESULT') then (* TODO: This is ugly. *)
+    if (Tag <> '') and (Tag <> 'RESULT') then
     begin
-      Emit('', 'ld hl,' + Tag, 'Global ' + Name);
-      EmitI('push hl');
+      if Tag[1] in ['0'..'9', '-'] then
+        EmitI(Tag + ' i>a')
+      else if IsIR4ScalarType(DataType) and (Value2 = 0) and (WithC = 0) and (WithI = 0) and (WithA = 0) and (WithF = 0) and not IsRef then
+        EmitI('& ' + Tag)
+      else
+        EmitI(Tag);
     end
     else
     begin
-      // TODO: Make this a macro to ease optimization?
-      Emit('', 'ld hl,(display+' + IntToStr(Level * 2) + ')', 'Local ' + Name);
-      if Value <> 0 then
-      begin
-        Emit('', 'ld de,' + IntToStr(Value), '');
-        Emit('', 'add hl,de', '');
-      end;
-      Emit('', 'push hl', '');
+      if (Sym^.Level > 0) and (Sym^.Level <> Level) then
+        EmitI('__display ' + IntToStr(Sym^.Level) + ' size_a * a+ a@')
+      else
+        EmitI('_locals');
+      if (IrC <> 0) or (IrI <> 0) or (IrA <> 0) or (IrF <> 0) then
+        EmitI(IR4TupleExprStr(IrC, IrI, IrA, IrF) + ' a+');
     end;
-
     if IsRef then
-    begin
-      // TODO: Make this a macro to ease optimization?
-      Emit('', 'pop hl', '');
-      Emit('', 'ld e,(hl)', '');
-      Emit('', 'inc hl', '');
-      Emit('', 'ld d,(hl)', '');
-      Emit('', 'push de', '');
-    end;
-
-    if Value2 <> 0 then
-    begin
-      EmitI('pop hl');
-      if Value2 <> 0 then
-      begin
-        EmitI('ld de,' + IntToStr(Value2));
-        EmitI('add hl,de');
-      end;
-      EmitI('push hl');
-    end;
+      EmitI('a@');
+    if (WithC <> 0) or (WithI <> 0) or (WithA <> 0) or (WithF <> 0) then
+      EmitI(IR4TupleExprStr(WithC, WithI, WithA, WithF) + ' a+')
+    else if Value2 <> 0 then
+      EmitI(IntToStr(Value2) + ' a+');
   end;
 end;
 
@@ -3659,198 +2606,80 @@ begin
   if DataType = dtUnknown then
     Error('Cannot read through untyped pointer');
 
-  if DataType^.Kind = scStringType then
-  begin
-    EmitI('pop hl');
-    EmitI('call __loadstr');
-    Exit;
-  end;
-
-  if DataType = dtReal then
-  begin
-    EmitI('pop hl');
-    EmitI('call __loadfp');
-    EmitI('pushfp');
-    Exit;
-  end;
-
-  case DataType^.Value of
-    1: begin
-          EmitI('pop hl');
-          EmitI('ld d,0');
-          EmitI('ld e,(hl)');
-          EmitI('push de');
-        end;
-    2: begin
-          EmitI('pop hl');
-          EmitI('ld de,(hl)');
-          EmitI('push de');
-       end;
-    else
-    begin
-      Emit('', 'pop hl', 'Load');
-      EmitI('ld bc,' + IntToStr(DataType^.Value));
-      EmitI('call __load16');
-    end
-  end;
+  while DataType^.Kind = scAliasType do DataType := DataType^.DataType;
+  if IsIR4IntType(DataType) then
+    EmitI('@')
+  else if DataType = dtReal then
+    EmitI('f@')
+  else if DataType^.Kind = scPointerType then
+    EmitI('a@')
+  else if DataType^.Kind in [scStringType, scSetType, scArrayType, scRecordType] then
+    { Composite values stay as :a addresses }
+  else if DataType^.Value = 1 then
+    EmitI('u8@')
+  else
+    Error('IR4 load unsupported size: ' + IntToStr(DataType^.Value));
 end;
 
 (**
  * Emits code that pops an address off the stack and pushes data located at
  * that address on the stack. Takes into account the given datatype (mostly
  * for the size)
- *)procedure EmitStore(DataType: PSymbol);
+ *)
+procedure EmitStore(DataType: PSymbol);
 begin
-  if DataType^.Kind = scStringType then
-  begin
-    if Optimize and (Code <> nil) then
-    begin
-      if Code^.Instruction = 'call __loadstr' then
-      begin
-        RemoveCode;
-        EmitI('pop de');
-        EmitI('ld a,' + IntToStr(DataType^.Value - 1));
-        EmitI('call __movestr');
-        Exit;
-      end;
-    end;
-
-    EmitI('ld a,' + IntToStr(DataType^.Value - 1));
-    EmitI('call __storestr');
-    Exit;
-  end;
-
-  if DataType = dtReal then
-  begin
-    EmitI('popfp');
-    EmitI('exx');
-    EmitI('pop hl');
-    EmitI('call __storefp');
-    Exit;
-  end;
-
-
-  case DataType^.Value of
-    1: begin
-          EmitI('pop de');
-          EmitI('pop hl');
-          EmitI('ld (hl),e');
-        end;
-    2: begin
-          EmitI('pop de');
-          EmitI('pop hl');
-          EmitI('ld (hl),de');
-        end;
-    else
-    begin
-      if Optimize and (Code^.Instruction = 'call __load16') then
-      begin
-        RemoveCode;
-        EmitI('pop de');
-        EmitI('ldir');
-      end
-      else
-      begin
-        EmitI('ld bc,' + IntToStr(DataType^.Value));
-        EmitI('call __store16');
-      end;
-    end;
-  end;
+  while DataType^.Kind = scAliasType do DataType := DataType^.DataType;
+  if IsIR4IntType(DataType) then
+    EmitI('swap !')
+  else if DataType = dtReal then
+    EmitI('swap f!')
+  else if DataType^.Kind = scPointerType then
+    EmitI('swap a!')
+  else if DataType^.Kind = scStringType then
+    EmitI(IntToStr(DataType^.Value - 1) + ' pas_strcopy_clamp drop')
+  else if DataType^.Kind = scSetType then
+    EmitI('32 memcpy')
+  else if DataType^.Kind in [scArrayType, scRecordType] then
+    EmitI(IR4TupleExprStr(DataType^.IrC, DataType^.IrI, DataType^.IrA, DataType^.IrF) + ' memcpy')
+  else if DataType^.Value = 1 then
+    EmitI('swap i8!')
+  else
+    Error('IR4 store unsupported size: ' + IntToStr(DataType^.Value));
 end;
 
 procedure EmitLiteral(Value: Integer);
 begin
-  Emit('', 'ld de,' + IntToStr(Value), 'Literal ' + IntToStr(Value));
-  EmitI('push de');
+  EmitI(IntToStr(Value));
 end;
 
 (**
- * Return assembly that emits a given number of zero bytes. Works around
- * an sjasmplus bug that lets "db 1,0" truncate the program counter to
- * 16 bits when no other directive does.
- *)
-function ZeroFill(Count: Integer): String;
-begin
-  if Count = 1 then
-    ZeroFill := 'db 0'
-  else
-    ZeroFill := 'ds ' + IntToStr(Count) + ',0';
-end;
-
-(**
- * Emits code that grows the stack by the given number of bytes.
- *)
-procedure EmitSpace(Bytes: Integer);
-begin
-  if Bytes <= 10 then
-  begin
-    while Bytes > 1 do
-    begin
-      EmitI('push hl');
-      Bytes := Bytes - 2;
-    end;
-    if Bytes > 0 then EmitI('dec sp');
-  end
-  else if Bytes = 256 then
-    EmitI('call __mkstr')
-  else
-  begin
-    Emit('', 'ld hl,-' + IntToStr(Bytes), 'Space');
-    EmitI('add hl,sp');
-    EmitI('ld sp,hl');
-  end;
-end;
-
-(**
- * Emits code that shrinks the stack by the given number of bytes.
- *)
-procedure EmitClear(Bytes: Integer);
-begin
-  if Bytes <= 10 then
-  begin
-    while Bytes > 1 do
-    begin
-      EmitI('pop hl');
-      Bytes := Bytes - 2;
-    end;
-    if Bytes > 0 then EmitI('inc sp');
-  end
-  else if Bytes = 256 then
-    EmitI('call __rmstr')
-  else
-  begin
-    Emit('', 'ld hl,' + IntToStr(Bytes), 'Clear');
-    EmitI('add hl,sp');
-    EmitI('ld sp,hl');
-  end;
-end;
-
-(**
- * Emits code implementing the given relational operator for 16 bit integers.
+ * Emits code implementing the given relational operator for integers.
  *)
 procedure EmitRelOp(Op: TToken);
 begin
-  if (Op = toGt) or (Op = toLeq) then
-  begin
-    Emit('','pop hl', 'RelOp ' + IntToStr(Ord(Op)));
-    EmitI('pop de');
-  end
-  else
-  begin
-    Emit('','pop de', 'RelOp ' + IntToStr(Ord(Op)));
-    EmitI('pop hl');
-  end;
-
   case Op of
-    toEq:         EmitI('call __int16_eq');
-    toNeq:        EmitI('call __int16_neq');
-    toLt, toGt:   EmitI('call __int16_lt');
-    toLeq, toGeq: EmitI('call __int16_geq');
+    toEq:  EmitI('=');
+    toNeq: EmitI('<>');
+    toLt:  EmitI('<');
+    toGt:  EmitI('>');
+    toLeq: EmitI('<=');
+    toGeq: EmitI('>=');
   end;
+end;
 
-  Emit('', 'ld h,0', '');
-  Emit('', 'ld l,a', '');
-  Emit('', 'push hl', '');
+(**
+ * Emits code implementing the given relational operator for pointers.
+ *)
+procedure EmitPtrOp(Op: TToken);
+begin
+  case Op of
+    toEq:  EmitI('a=');
+    toNeq: EmitI('a<>');
+    toLt:  EmitI('a<');
+    toGt:  EmitI('a>');
+    toLeq: EmitI('a> 0 =');
+    toGeq: EmitI('a< 0 =');
+  end;
 end;
 
 procedure EmitUnOp(Op: TToken; DataType: PSymbol); forward;
@@ -3859,21 +2688,15 @@ procedure EmitUnOp(Op: TToken; DataType: PSymbol); forward;
  * Emits code implementing the given relational operator for strings.
  *)
 procedure EmitStrOp(Op: TToken);
-var
-  Invert: Boolean;
 begin
-  Invert := (Op = toNeq) or (Op = toGt) or (Op = toGeq);
-
   case Op of
-    toEq, toNeq: EmitI('call __streq');
-    toLt, toGeq: EmitI('call __strlt');
-    toGt, toLeq: EmitI('call __strleq');
+    toEq:  EmitI('pas_streq');
+    toNeq: EmitI('pas_streq 0 =');
+    toLt:  EmitI('pas_strcmp 0 <');
+    toLeq: EmitI('pas_strcmp 0 <=');
+    toGt:  EmitI('pas_strcmp 0 >');
+    toGeq: EmitI('pas_strcmp 0 >=');
   end;
-
-  EmitClear(512);
-
-  EmitI('push de');
-  if Invert then EmitUnOp(toNot, dtBoolean);
 end;
 
 procedure EmitNeg(DataType: PSymbol); forward;
@@ -3882,38 +2705,16 @@ procedure EmitNeg(DataType: PSymbol); forward;
  * Emits the given set operation.
  *)
 procedure EmitSetOp(Op: TToken);
-var
-  Invert: Boolean;
 begin
-  Invert := Op = toNeq;
-
-  if Op = toIn then
-  begin
-    EmitI('call __setmember');
-    EmitClear(34);
-    EmitI('push de');
-  end
-  else
-  begin
-    case Op of
-      toAdd: EmitI('call __setadd');
-      toSub: EmitI('call __setsub');
-      toMul: EmitI('call __setmul');
-
-      toEq, toNeq: EmitI('call __seteq');
-      toLeq: EmitI('call __setleq');
-      toGeq: EmitI('call __setgeq');
-    end;
-
-    if Op in [toAdd, toSub, toMul] then
-      EmitClear(32)
-    else
-    begin
-      EmitClear(64);
-      EmitI('push de');
-    end;
-
-    if Invert then EmitUnOp(toNot, dtBoolean);
+  case Op of
+    toIn:  EmitI('pas_set_in');
+    toAdd: EmitI(AllocIR4Temp(32) + ' pas_set_add');
+    toSub: EmitI(AllocIR4Temp(32) + ' pas_set_sub');
+    toMul: EmitI(AllocIR4Temp(32) + ' pas_set_mul');
+    toEq:  EmitI('pas_set_eq');
+    toNeq: EmitI('pas_set_eq 0 =');
+    toLeq: EmitI('pas_set_leq');
+    toGeq: EmitI('pas_set_geq');
   end;
 end;
 
@@ -3921,35 +2722,21 @@ end;
  * Emits code implementing the given mathematic operation for floats.
  *)
 procedure EmitFloatOp(Op: TToken);
-var
-  Invert: Boolean;
 begin
-  EmitI('popfp');
-  EmitI('exx');
-  EmitI('popfp');
-
-  Invert := (Op = toNeq) or (Op = toGt) or (Op = toGeq);
-
   case Op of
-    toAdd: EmitI('call __fpadd');
-    toSub: EmitI('call __fpsub');
-    toMul: EmitI('call __fpmul');
-    toDiv: EmitI('call __fpdiv');
-
-    toEq, toNeq: EmitI('call __flteq');
-    toLt, toGeq: EmitI('call __fltlt');
-    toGt, toLeq: EmitI('call __fltleq');
+    toAdd: EmitI('f+');
+    toSub: EmitI('f-');
+    toMul: EmitI('f*');
+    toDiv: EmitI('f/');
+    toEq:  EmitI('f=');
+    toNeq: EmitI('f<>');
+    toLt:  EmitI('f<');
+    toGt:  EmitI('f>');
+    toLeq: EmitI('f> 0 =');
+    toGeq: EmitI('f< 0 =');
   else
     Error(TokenStr[Op] + ' not allowed for Real');
   end;
-
-  if Op in [toAdd, toSub, toMul, toDiv] then
-  begin
-    EmitI('pushfp');
-  end
-  else EmitI('push de');
-
-  if Invert then EmitUnOp(toNot, dtBoolean);
 end;
 
 (**
@@ -3957,7 +2744,7 @@ end;
  *)
 procedure EmitJump(Target: String);
 begin
-    EmitI('jp ' + Target);
+  EmitI('jmp ' + Target);
 end;
 
 (**
@@ -3965,12 +2752,10 @@ end;
  *)
 procedure EmitJumpIf(When: Boolean; Target: String);
 begin
-  EmitI('pop hl');
-  EmitI('bit 0,l');
   if When then
-    EmitI('jp nz,' + Target)
+    EmitI('0 = jz ' + Target)
   else
-    EmitI('jp z,' + Target);
+    EmitI('jz ' + Target);
 end;
 
 (**
@@ -3980,38 +2765,18 @@ end;
  *)
 procedure EmitBinOp(Op: TToken; DataType: PSymbol);
 begin
-  Emit('', 'pop de', '');
-  Emit('', 'pop hl', '');
-
   case Op of
-    toAdd: EmitI('add hl,de');
-    toSub: begin
-             EmitI('xor a');
-             EmitI('sbc hl,de');
-           end;
-    toMul: Emit('', 'call __mul16', 'Mul');
-    toDivKW: Emit('', 'call __sdiv16c', 'Div');
-    toMod: begin Emit('', 'call __sdiv16c', 'Mod'); EmitI('ex hl,de'); end;
-    toAnd: begin
-             EmitI('ld a,h'); EmitI('and d'); EmitI('ld h,a');
-             EmitI('ld a,l'); EmitI('and e'); EmitI('ld l,a');
-           end;
-    toOr: begin
-             EmitI('ld a,h'); EmitI('or d'); EmitI('ld h,a');
-             EmitI('ld a,l'); EmitI('or e'); EmitI('ld l,a');
-           end;
-    toXor: begin
-             EmitI('ld a,h'); EmitI('xor d'); EmitI('ld h,a');
-             EmitI('ld a,l'); EmitI('xor e'); EmitI('ld l,a');
-           end;
-    toShl: begin
-              EmitI('call __int_shl');
-           end;
-    toShr: begin
-              EmitI('call __int_shr');
-           end;
-    end;
-  Emit('', 'push hl', '');
+    toAdd:   EmitI('+');
+    toSub:   EmitI('-');
+    toMul:   EmitI('*');
+    toDivKW: EmitI('/');
+    toMod:   EmitI('mod');
+    toAnd:   EmitI('and');
+    toOr:    EmitI('or');
+    toXor:   EmitI('xor');
+    toShl:   EmitI('<<');
+    toShr:   EmitI('>>');
+  end;
 end;
 
 (**
@@ -4019,59 +2784,28 @@ end;
  * Data type is also passed as a parameter because some 8 bit cases can be
  * implemented by shorter code.
  *)
-procedure EmitUnOp(Op: TToken; DataType: PSymbol);
+procedure EmitUnOp;
 begin
-  case Op of
-    toNot:
-      begin
-        Emit('', 'pop hl', 'Not');
-        if DataType = dtBoolean then
-        begin
-          EmitI('ld a,1');
-          EmitI('xor l');
-          EmitI('ld l,a');
-        end
-        else
-        begin
-          if DataType = dtInteger then
-          begin
-            EmitI('ld a,h');
-            EmitI('cpl');
-            EmitI('ld h,a');
-          end;
-          EmitI('ld a,l');
-          EmitI('cpl');
-          EmitI('ld l,a');
-        end;
-        EmitI('push hl');
-      end;
+  if Op = toNot then
+  begin
+    if DataType = dtBoolean then
+      EmitI('0 =')
+    else
+      EmitI('-1 xor');
   end;
 end;
 
 (**
  * Emits code that implements negation for the data type passed as a parameter.
  *)
-procedure EmitNeg(DataType: PSymbol);
+procedure EmitNeg;
 begin
   if (DataType = dtInteger) or (DataType = dtByte) then
-  begin
-    EmitI('pop de');
-    EmitI('and a');
-    EmitI('sbc hl,hl');
-    EmitI('sbc hl,de');
-    EmitI('push hl');
-  end
+    EmitI('0 swap -')
   else if DataType = dtReal then
-  begin
-    EmitI('popfp');
-
-    EmitI('ld a,b');
-    EmitI('xor 128');
-    EmitI('ld b,a');
-
-    EmitI('pushfp');
-  end
-  else Error('Invalid type ' + TypeName(DataType));
+    EmitI('fnegate')
+  else
+    Error('Invalid type ' + TypeName(DataType));
 end;
 
 (**
@@ -4080,12 +2814,10 @@ end;
  *)
 procedure EmitInc(DataType: PSymbol);
 begin
-  EmitI('pop hl');
-
-  if DataType^.Value = 2 then
-    EmitI('call __inc16')
+  if IsIR4IntType(DataType) then
+    EmitI('dup @ 1 + swap !')
   else
-    EmitI('inc (hl)');
+    EmitI('dup u8@ 1 + swap i8!');
 end;
 
 (**
@@ -4094,12 +2826,10 @@ end;
  *)
 procedure EmitDec(DataType: PSymbol);
 begin
-  EmitI('pop hl');
-
-  if DataType^.Value = 2 then
-    EmitI('call __dec16')
+  if IsIR4IntType(DataType) then
+    EmitI('dup @ 1 - swap !')
   else
-    EmitI('dec (hl)');
+    EmitI('dup u8@ 1 - swap i8!');
 end;
 
 (**
@@ -4108,9 +2838,7 @@ end;
  *)
 procedure EmitShl;
 begin
-  EmitI('pop hl');
-  EmitI('add hl,hl');
-  EmitI('push hl');
+  EmitI('1 <<');
 end;
 
 (**
@@ -4122,40 +2850,16 @@ begin
   while DataType^.Kind = scSubrangeType do
     DataType := DataType^.DataType;
 
-  EmitI('ld a,' + IntToStr(VarType^.Value - 1));
-
   if (DataType = dtInteger) or (DataType = dtByte) then
-  begin
-    EmitI('pop de');
-    EmitI('pop hl');
-    EmitI('call __strn');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_int')
   else if DataType = dtChar then
-  begin
-    EmitI('pop de');
-    EmitI('pop hl');
-    EmitI('call __strc');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_char')
   else if DataType^.Kind = scStringType then
-  begin
-    EmitI('pop de');
-    { String on stack }
-    EmitI('call __strs');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_str')
   else if DataType = dtReal then
-  begin
-    EmitI('pop de');
-    EmitI('exx');
-    EmitI('popfp');
-    EmitI('call __strf');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_float')
   else if DataType^.Kind = scEnumType then
-  begin
-    EmitI('pop de');
-    EmitI('pop bc');
-    EmitI('ld hl,' + DataType^.Tag);
-    EmitI('call __stre');
-  end
+    EmitI(DataType^.Tag + ' ' + IntToStr(VarType^.Value - 1) + ' pas_str_enum')
   else Error('Unprintable type: ' + TypeName(DataType));
 end;
 
@@ -4168,47 +2872,16 @@ begin
   while DataType^.Kind = scSubrangeType do
     DataType := DataType^.DataType;
 
-  EmitI('ld a,' + IntToStr(VarType^.Value - 1));
-
   if (DataType = dtInteger) or (DataType = dtByte) then
-  begin
-    EmitI('pop de');
-    EmitI('pop bc');
-    EmitI('pop hl');
-    EmitI('call __strn_fmt');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_int_w')
   else if DataType = dtChar then
-  begin
-    EmitI('pop de');
-    EmitI('pop bc');
-    EmitI('pop hl');
-    EmitI('call __strc_fmt');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_char_w')
   else if DataType^.Kind = scStringType then
-  begin
-    EmitI('pop de');
-    EmitI('pop bc');  (* C = width, used by __strs_fmt *)
-    { String on stack }
-    EmitI('call __strs_fmt');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_str_w')
   else if DataType = dtReal then
-  begin
-    EmitI('pop de'); (* addr *)
-    EmitI('pop bc'); (* width *)
-    EmitI('exx');
-    EmitI('popfp');
-    EmitI('call __strf_exp');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_float_exp')
   else if DataType^.Kind = scEnumType then
-  begin
-    EmitI('pop de');              (* DE = destination *)
-    EmitI('pop bc');              (* C = width *)
-    EmitI('pop hl');              (* L = enum value *)
-    EmitI('ld b,c');              (* B = width *)
-    EmitI('ld c,l');              (* C = enum value, B = width *)
-    EmitI('ld hl,' + DataType^.Tag);
-    EmitI('call __stre_fmt');
-  end
+    EmitI(DataType^.Tag + ' ' + IntToStr(VarType^.Value - 1) + ' pas_str_enum_w')
   else Error('Unprintable type: ' + TypeName(DataType));
 end;
 
@@ -4218,17 +2891,8 @@ end;
  *)
 procedure EmitStr2(DataType, VarType: PSymbol);
 begin
-  EmitI('ld a,' + IntToStr(VarType^.Value - 1));
-
   if DataType = dtReal then
-  begin
-    EmitI('pop hl'); (* address *)
-    EmitI('pop de'); (* decimals  *)
-    EmitI('pop bc'); (* width    *)
-    EmitI('exx');
-    EmitI('popfp');
-    EmitI('call __strf_fix');
-  end
+    EmitI(IntToStr(VarType^.Value - 1) + ' pas_str_float_fix')
   else Error('Unprintable type: ' + TypeName(DataType));
 end;
 
@@ -4244,45 +2908,17 @@ begin
     DataType := DataType^.DataType;
 
   if (DataType = dtInteger) or (DataType = dtByte) then
-  begin
-    Emit('', 'pop hl', '');
-    EmitI('call __putn');
-  end
+    EmitI('typei')
   else if DataType = dtChar then
-  begin
-    Emit('', 'pop de', '');
-    EmitI('ld a,e');
-    EmitI('call __putc');
-  end
+    EmitI('xemit')
   else if DataType^.Kind = scStringType then
-  begin
-    if Optimize and (Code <> nil) then
-    begin
-      if Code^.Instruction = 'call __loadstr' then
-      begin
-        RemoveCode;
-        EmitI('call __puts');
-        Exit;
-      end;
-    end;
-
-    EmitI('ld hl,0');
-    EmitI('add hl,sp');
-    EmitI('call __puts');
-    EmitI('call __rmstr');
-  end
+    EmitI('pas_prints')
   else if DataType = dtReal then
-  begin
-    EmitI('popfp');
-    EmitI('call __putf');
-  end
+    EmitI('16 pas_putf_exp')
   else if DataType^.Kind = scEnumType then
-  begin
-    EmitI('pop hl');
-    EmitI('ld de,' + DataType^.Tag);
-    EmitI('call __pute');
-  end
-  else Error('Unprintable type: ' + TypeName(DataType));
+    EmitI(DataType^.Tag + ' pas_print_enum')
+  else
+    Error('Unprintable IR4 type: ' + TypeName(DataType));
 end;
 
 (**
@@ -4296,38 +2932,18 @@ begin
   while DataType^.Kind = scSubrangeType do
     DataType := DataType^.DataType;
 
-  Emit('', 'pop bc', '');
-
   if (DataType = dtInteger) or (DataType = dtByte) then
-  begin
-    Emit('', 'pop hl', '');
-    EmitI('call __putn_fmt');
-  end
+    EmitI('typeiw')
   else if DataType = dtChar then
-  begin
-    Emit('', 'pop hl', '');
-    EmitI('call __putc_fmt');
-  end
+    EmitI('pas_printc_w')
   else if DataType^.Kind = scStringType then
-  begin
-    EmitI('ld hl,0');
-    EmitI('add hl,sp');
-    EmitI('call __puts_fmt');
-    EmitI('call __rmstr');
-  end
+    EmitI('pas_prints_w')
   else if DataType = dtReal then
-  begin
-    EmitI('exx');
-    EmitI('popfp');
-    EmitI('call __putf_exp');
-  end
+    EmitI('pas_putf_exp')
   else if DataType^.Kind = scEnumType then
-  begin
-    EmitI('pop hl');
-    EmitI('ld de,' + DataType^.Tag);
-    EmitI('call __pute_fmt');
-  end
-  else Error('Unprintable type: ' + TypeName(DataType));
+    EmitI(DataType^.Tag + ' swap pas_print_enum_w')
+  else
+    Error('Unprintable IR4 type: ' + TypeName(DataType));
 end;
 
 (**
@@ -4340,19 +2956,14 @@ procedure EmitWrite2(DataType: PSymbol);
 begin
   if DataType <> dtReal then Error('Unprintable type for format 2: ' + TypeName(DataType));
 
-  EmitI('pop bc');
-  EmitI('pop de');
-  EmitI('exx');
-  EmitI('popfp');
-  EmitI('call __putf_fix');
+  EmitI('pas_putf_fix');
 end;
 
 (**
- * Flushes and closes the assembly target file.
+ * Closes the assembly target file.
  *)
-procedure CloseTarget();
+procedure CloseTarget;
 begin
-  Flush;
   Close(Target);
 end;
 
@@ -4361,8 +2972,7 @@ end;
  *)
 procedure EmitCharToString;
 begin
-  EmitI('pop de');
-  EmitI('call __char2str');
+  EmitI(AllocIR4Temp(256) + ' pas_char2str');
 end;
 
 (* -------------------------------------------------------------------------- *)
@@ -4448,28 +3058,14 @@ begin
 
   if (Left = dtReal) and ((Right = dtInteger) or (Right = dtByte)) then
   begin
-    EmitI('pop hl');
-    EmitI('call FLOAT');
-    EmitI('pushfp');
+    EmitI('i>f');
     TypeCheck := dtReal;
     Exit;
   end;
 
   if ((Left = dtInteger) or (Left = dtByte)) and (Right = dtReal) and (Check <> tcAssign) then
   begin
-    EmitI('popfp');
-    EmitI('exx');
-    EmitI('pop hl');
-    EmitI('exx');
-    EmitI('pushfp');
-    EmitI('exx');
-    EmitI('call FLOAT');
-    EmitI('exx');
-    EmitI('popfp');
-    EmitI('exx');
-    EmitI('pushfp');
-    EmitI('exx');
-    EmitI('pushfp');
+    EmitI('swap i>f swap');
     TypeCheck := dtReal;
     Exit;
   end;
@@ -4496,10 +3092,7 @@ begin
          maximum length, so that value parameters and assignments to shorter
          string types never carry oversized data into the callee's frame. *)
       if Left^.Value < Right^.Value then
-      begin
-        EmitI('ld a,' + IntToStr(Left^.Value - 1));
-        EmitI('call __strclamp');
-      end;
+        EmitI(AllocIR4Temp(Left^.Value) + ' swap ' + IntToStr(Left^.Value - 1) + ' pas_strcopy_clamp');
       TypeCheck := Left;
       Exit;
     end;
@@ -4565,19 +3158,28 @@ function ParseExpression: PSymbol; forward;
 function ParseSelectorChain(Variable, DataType: PSymbol; Offset: Integer): PSymbol;
 var
   Field: PSymbol;
-  Size: Integer;
+  IrOffC, IrOffI, IrOffA, IrOffF: Integer;
 
   procedure DelayedEmitAddr;
   begin
     if Offset >= 0 then
     begin
-      EmitI('ld hl,' + Variable^.Tag + ' + ' + IntToStr(Offset));
-      EmitI('push hl');
+      if (Length(Variable^.Tag) > 0) and (Variable^.Tag[1] in ['0'..'9', '-']) then
+        EmitI(Variable^.Tag + ' i>a')
+      else if (Offset = 0) and (IrOffC = 0) and (IrOffI = 0) and (IrOffA = 0) and (IrOffF = 0) and
+         IsIR4ScalarType(Variable^.DataType) and not Variable^.IsRef then
+        EmitI('& ' + Variable^.Tag)
+      else
+        EmitI(Variable^.Tag);
+      if (IrOffC <> 0) or (IrOffI <> 0) or (IrOffA <> 0) or (IrOffF <> 0) then
+        EmitI(IR4TupleExprStr(IrOffC, IrOffI, IrOffA, IrOffF) + ' a+');
       Offset := -1;
+      IrOffC := 0; IrOffI := 0; IrOffA := 0; IrOffF := 0;
     end;
   end;
 
 begin
+  IrOffC := 0; IrOffI := 0; IrOffA := 0; IrOffF := 0;
   while Scanner.Token in [toLBrack, toPeriod, toCaret] do
   begin
     if Scanner.Token = toLBrack then
@@ -4588,7 +3190,7 @@ begin
         NextToken;
         if DataType^.Kind = scArrayType then
         begin
-          TypeCheck(DataType^.IndexType, ParseExpression(), tcExpr);
+          TypeCheck(DataType^.IndexType, ParseExpression, tcExpr);
 
           if DataType^.IndexType^.Low <> 0 then
           begin
@@ -4598,25 +3200,15 @@ begin
 
           DataType := DataType^.DataType;
 
-          Size := DataType^.Value;
-          if Size > 1 then
-          begin
-            case Size of
-              2: EmitShl;
-              4: begin EmitShl; EmitShl; end;
-              else begin
-                EmitLiteral(Size);
-                EmitBinOp(toMul, dtInteger);
-              end;
-            end;
-          end;
-          EmitBinOp(toAdd, dtInteger);
+          if (DataType^.IrC <> 1) or (DataType^.IrI <> 0) or (DataType^.IrA <> 0) or (DataType^.IrF <> 0) then
+            EmitI(IR4TupleExprStr(DataType^.IrC, DataType^.IrI, DataType^.IrA, DataType^.IrF) + ' *');
+          EmitI('a+');
         end
         else if DataType^.Kind = scStringType then
         begin
-          TypeCheck(dtInteger, ParseExpression(), tcExpr);
+          TypeCheck(dtInteger, ParseExpression, tcExpr);
           DataType := dtChar;
-          EmitBinOp(toAdd, dtInteger);
+          EmitI('a+');
         end
         else Error('Not an array or a string');
       until Scanner.Token <> toComma;
@@ -4637,14 +3229,17 @@ begin
       DataType := Field^.DataType;
 
       if Offset >= 0 then
-        Inc(Offset, Field^.Value)
+      begin
+        Inc(Offset, Field^.Value);
+        Inc(IrOffC, Field^.IrC);
+        Inc(IrOffI, Field^.IrI);
+        Inc(IrOffA, Field^.IrA);
+        Inc(IrOffF, Field^.IrF);
+      end
       else
       begin
-        if Field^.Value <> 0 then
-        begin
-          EmitLiteral(Field^.Value);
-          EmitBinOp(toAdd, dtInteger);
-        end;
+        if (Field^.IrC <> 0) or (Field^.IrI <> 0) or (Field^.IrA <> 0) or (Field^.IrF <> 0) then
+          EmitI(IR4TupleExprStr(Field^.IrC, Field^.IrI, Field^.IrA, Field^.IrF) + ' a+');
       end;
 
       NextToken;
@@ -4658,11 +3253,7 @@ begin
 
       NextToken;
 
-      EmitI('pop hl');
-      EmitI('ld e,(hl)');
-      EmitI('inc hl');
-      EmitI('ld d,(hl)');
-      EmitI('push de');
+      EmitI('a@');
 
       if DataType = dtPointer then
         DataType := dtUnknown
@@ -4800,29 +3391,17 @@ end;
 
 (**
  * Parses read access to a "magic" built-in variable. Currently only used for
- * Mem[] and Port[].
+ * Mem[].
  *)
 function ParseBuiltInVarRead(Sym: PSymbol): PSymbol;
 begin
-  if (Sym = MemArray) or (Sym = PortArray) then
+  if Sym = MemArray then
   begin
     ParseToken(toLBrack);
     TypeCheck(dtInteger, ParseExpression, tcAssign);
     ParseToken(toRBrack);
 
-    if Sym = MemArray then
-    begin
-      EmitI('pop hl');
-      EmitI('ld e,(hl)')
-    end
-    else
-    begin
-      EmitI('pop bc');
-      EmitI('in e,(c)');
-    end;
-
-    EmitI('ld d,0');
-    EmitI('push de');
+    EmitI('i>a u8@');
   end
   else Error('Invalid magic var: ' + Sym^.Name);
 
@@ -4831,11 +3410,11 @@ end;
 
 (**
  * Parses write access to a "magic" built-in variable. Currently only used for
- * Mem[] and Port[].
+ * Mem[].
  *)
 procedure ParseBuiltInVarWrite(Sym: PSymbol);
 begin
-  if (Sym = MemArray) or (Sym = PortArray) then
+  if Sym = MemArray then
   begin
     ParseToken(toLBrack);
     TypeCheck(dtInteger, ParseExpression, tcAssign);
@@ -4843,18 +3422,7 @@ begin
     ParseToken(toBecomes);
     TypeCheck(dtByte, ParseExpression, tcAssign);
 
-    if Sym = MemArray then
-    begin
-      EmitI('pop de');
-      EmitI('pop hl');
-      EmitI('ld (hl),e');
-    end
-    else
-    begin
-      EmitI('pop hl');
-      EmitI('pop bc');
-      EmitI('out (c),l');
-    end;
+    EmitI('swap i>a i8!');
   end
   else Error('Invalid magic var: ' + Sym^.Name);
 end;
@@ -4868,7 +3436,6 @@ end;
 function ParseBuiltInFunction(Func: PSymbol): PSymbol;
 var
   T, Sym: PSymbol;
-  Old: PCode;
 begin
   if Func^.Kind <> scFunc then
     Error('Not a built-in function: ' + Func^.Name);
@@ -4898,18 +3465,12 @@ begin
 
     if (Sym = dtInteger) or (Sym = dtByte) then
     begin
-      EmitI('pop hl');
-      EmitI('call __abs16');
-      EmitI('push hl');
-
+      EmitI('pas_abs');
       ParseBuiltInFunction := dtInteger;
     end
     else if Sym = dtReal then
     begin
-      EmitI('popfp');
-      EmitI('res 7,b');
-      EmitI('pushfp');
-
+      EmitI('fabs');
       ParseBuiltInFunction := dtReal;
     end
     else Error('Integer or Real expected');
@@ -4920,33 +3481,31 @@ begin
     Sym := LookupGlobalOrFail(Scanner.StrValue);
     NextToken;
     ParseVariableAccess(Sym);
+    EmitI('a>i');
     ParseBuiltInFunction := dtInteger;
   end
   else if Func = PtrFunc then
   begin
     TypeCheck(dtInteger, ParseExpression, tcAssign);
+    EmitI('i>a');
     ParseBuiltInFunction := dtPointer;
   end
   else if Func = SizeFunc then
   begin
-    if Release then MuteEmitter;
-
     Expect(toIdent);
     Sym := LookupGlobalOrFail(Scanner.StrValue);
     NextToken;
 
     if Sym^.Kind = scVar then
     begin
-      Old := Code;
+      MuteEmitter;
       Sym := ParseVariableAccess(Sym);
-      while Code <> Old do RemoveCode;
+      UnmuteEmitter;
     end;
 
-    if Release then UnmuteEmitter;
-
     if Sym^.Kind in [scType, scArrayType, scRecordType, scEnumType, scStringType,
-                     scFileType, scSubrangeType] then
-      EmitLiteral(Sym^.Value)
+                     scFileType, scSubrangeType, scSetType, scPointerType] then
+      EmitI(IR4TupleExprStr(Sym^.IrC, Sym^.IrI, Sym^.IrA, Sym^.IrF))
     else
       Error('Cannot apply SizeOf to ' + Sym^.Name);
 
@@ -4955,74 +3514,31 @@ begin
   else if Func = OrdFunc then
   begin
     T := ParseExpression;
-    if T^.Kind <> scPointerType then CheckScalar(T);
+    if T^.Kind <> scPointerType then CheckScalar(T)
+    else EmitI('a>i');
     ParseBuiltInFunction := dtInteger;
   end
   else if Func = OddFunc then
   begin
     CheckScalar(ParseExpression);
-    Emit('', 'pop hl', 'Odd');
-    EmitI('ld a,l');
-    EmitI('and 1');
-    EmitI('ld l,a');
-    EmitI('ld h,0');
-    EmitI('push hl');
+    EmitI('1 and 0 <>');
     ParseBuiltInFunction := dtBoolean;
   end
   else if Func = EvenFunc then
   begin
     CheckScalar(ParseExpression);
-    Emit('', 'pop hl', 'Even');
-    EmitI('ld a,l');
-    EmitI('and 1');
-    EmitI('xor 1');
-    EmitI('ld l,a');
-    EmitI('ld h,0');
-    EmitI('push hl');
+    EmitI('1 and 0 =');
     ParseBuiltInFunction := dtBoolean;
   end
   else if Func = PredFunc then
   begin
     ParseBuiltInFunction := CheckScalar(ParseExpression);
-    // This should probably go elsewhere.
-    EmitI('pop de');
-    EmitI('dec de');
-    EmitI('push de');
+    EmitI('1 -');
   end
   else if Func = SuccFunc then
   begin
     ParseBuiltInFunction := CheckScalar(ParseExpression);
-    // This should probably go elsewhere.
-    EmitI('pop de');
-    EmitI('inc de');
-    EmitI('push de');
-  end
-  else if (Func = BdosFunc) or (Func = BDosHLFunc) then
-  begin
-    TypeCheck(dtInteger, ParseExpression, tcAssign);
-    if Scanner.Token = toComma then
-    begin
-      NextToken;
-      TypeCheck(dtInteger, ParseExpression, tcAssign);
-    end
-    else EmitLiteral(0);
-
-    EmitI('pop de');
-    EmitI('pop hl');
-    //EmitI('push ix');
-    EmitI('ld c,l');
-    EmitI('call 5');
-    //EmitI('pop ix');
-
-    if Func = BdosFunc then
-    begin
-      EmitI('ld l,a');
-      EmitI('ld h,0');
-    end;
-
-    EmitI('push hl');
-
-    ParseBuiltInFunction := dtByte;
+    EmitI('1 +');
   end
   else if (Func = HighFunc) or (Func = LowFunc) then
   begin
@@ -5031,9 +3547,9 @@ begin
     NextToken;
     if Sym^.Kind = scVar then
     begin
-      Old := Code;
+      MuteEmitter;
       Sym := ParseVariableAccess(Sym);
-      while Code <> Old do RemoveCode;
+      UnmuteEmitter;
     end;
     if Sym^.Kind = scArrayType then Sym := Sym^.IndexType;
     if Sym^.Kind = scSetType then Sym := Sym^.DataType;
@@ -5052,16 +3568,13 @@ begin
     begin
       NextToken;
       TypeCheck(dtString, ParseExpression, tcExact);
-      EmitI('call __stradd');
-      EmitClear(256);
+      EmitI(AllocIR4Temp(256) + ' pas_stradd');
     end;
 
     ParseBuiltInFunction := dtString;
   end
   else if (Func = FilePosFunc) or (Func = FileSizeFunc) or (Func = EolFunc) or (Func = EofFunc) or (Func = SeekEofFunc) or (Func = SeekEolnFunc) then
   begin
-    EmitLiteral(0);
-
     T := ParseVariableRef;
     if T^.Kind <> scFileType then Error('File type expected');
 
@@ -5107,22 +3620,31 @@ end;
  *)
 procedure EmitReadConsole(T: PSymbol);
 begin
-  if T = dtInteger then
-    EmitI('call __getn')
+  while T^.Kind = scSubrangeType do
+    T := T^.DataType;
+
+  if (T = dtInteger) or (T = dtByte) then
+  begin
+    EmitI('pas_get_i');
+    EmitStore(T);
+  end
   else if T = dtChar then
-    EmitI('call __getc')
+  begin
+    EmitI('pas_get_c');
+    EmitStore(T);
+  end
   else if T = dtReal then
-    EmitI('call __getr')
+  begin
+    EmitI('pas_get_f');
+    EmitStore(T);
+  end
   else if T^.Kind = scEnumType then
   begin
-    EmitI('ld de,' + T^.Tag);
-    EmitI('call __gete');
+    EmitI(T^.Tag + ' pas_get_e');
+    EmitStore(T);
   end
   else if T^.Kind = scStringType then
-  begin
-    EmitI('ld a,' + IntToStr(T^.Value - 1));
-    EmitI('call __gets');
-  end
+    EmitI(IntToStr(T^.Value - 1) + ' pas_get_s')
   else Error('Unreadable type');
 end;
 
@@ -5134,8 +3656,8 @@ end;
  *)
 procedure ParseBuiltInProcedure(Proc: PSymbol; BreakTarget, ContTarget: String);
 var
-  Sym, T, TT, V, U: PSymbol;
-  F, Size: Integer;
+  Sym, T, TT, V, U, ExprType: PSymbol;
+  F: Integer;
 begin
   if Proc^.Kind <> scProc then
     Error('Not a built-in procedure: ' + Proc^.Name);
@@ -5148,10 +3670,7 @@ begin
 
     TypeCheck(dtBoolean, ParseExpression, tcExact);
 
-    Emit('', 'pop bc', '');
-    Emit('', 'ld hl, ' + AddString(Source^.Name), '');
-    Emit('', 'ld de, ' + IntToStr(Source^.Line), '');
-    Emit('', 'call __assert', '');
+    EmitI(AddString(Source^.Name) + ' ' + IntToStr(Source^.Line) + ' pas_assert');
 
     Expect(toRParen); NextToken;
 
@@ -5168,37 +3687,9 @@ begin
       NextToken;
 
       TypeCheck(dtBoolean, ParseExpression, tcExact);
-
-      if Binary = btZXN then
-      begin
-        EmitI('pop af');
-        EmitI('jr nc,$+4');
-        EmitI('db $fd, $00');
-      end
-      else if Binary = btAgon then
-      begin
-        EmitI('pop af');
-        EmitI('jr nc,$+4');
-        EmitI('out ($10),a');
-      end
-      else if Binary in [btZX, btZX128] then
-      begin
-        EmitI('pop hl');
-        EmitI('.setbp "z80:hl!=0"');
-      end;
+      EmitI('drop');
 
       Expect(toRParen); NextToken;
-    end
-    else
-    begin
-      if Binary = btZXN then
-        EmitI('db $fd, $00')
-      else if Binary = btAgon then
-        EmitI('out ($10),a')
-      else if Binary in [btZX, btZX128] then
-      begin
-        EmitI('.setbp');
-      end;
     end;
 
     if Release then UnmuteEmitter;
@@ -5206,13 +3697,13 @@ begin
   else if Proc = BreakProc then
   begin
     if BreakTarget = '' then Error('Not in loop');
-    Emit('', 'jp ' + BreakTarget, 'Break');
+    EmitJump(BreakTarget);
     NextToken;
   end
   else if Proc = ContProc then
   begin
     if ContTarget = '' then Error('Not in loop');
-    Emit('', 'jp ' + ContTarget, 'Continue');
+    EmitJump(ContTarget);
     NextToken;
   end
   else if Proc = ExitProc then
@@ -5233,28 +3724,21 @@ begin
       Expect(toRParen);
       NextToken;
     end;
-    Emit('', 'jp ' + ExitTarget, 'Exit');
+    EmitJump(ExitTarget);
   end
   else if Proc = HaltProc then
-    begin
+  begin
     NextToken;
     if Scanner.Token = toLParen then
     begin
       NextToken;
       TypeCheck(dtByte, ParseExpression, tcExpr);
-      EmitI('pop hl');
-      EmitI('ld (__exitcode),hl');
-      (* TODO Currently ignored. CP/M 2.2 does not support this. *)
+      EmitI('pas_halt');
       Expect(toRParen);
       NextToken;
     end
     else
-    begin
-      EmitI('ld hl,0');
-      EmitI('ld (__exitcode),hl');
-    end;
-
-    EmitI('jp __done')
+      EmitI('0 pas_halt');
   end
   else if (Proc = IncludeProc) or (Proc = ExcludeProc) then
   begin
@@ -5274,13 +3758,10 @@ begin
     Expect(toRParen);
     NextToken;
 
-    EmitI('pop de');
-    EmitI('pop hl');
-
     if Proc = IncludeProc then
-      EmitI('call __setinclude')
+      EmitI('pas_set_incl drop')
     else
-      EmitI('call __setexclude');
+      EmitI('pas_set_excl drop');
   end
   else if Proc = InsertProc then
   begin
@@ -5305,10 +3786,7 @@ begin
     Expect(toRParen);
     NextToken;
 
-    (* Pass capacity in the variable that ultimately needs to carry it. *)
-    Emit('', 'ld b,' + IntToStr(V^.Value - 1), 'Capacity');
-    EmitI('call __insert');
-    EmitClear(260);                 (* 256 source + 2 dest + 2 start *)
+    EmitI(IntToStr(V^.Value - 1) + ' pas_str_insert');
   end
   else if Proc = DeleteProc then
   begin
@@ -5332,7 +3810,7 @@ begin
     Expect(toRParen);
     NextToken;
 
-    EmitI('call __delete');          (* Cleans up its own arguments *)
+    EmitI('pas_str_delete');
   end
   else if (Proc = ReadProc) or (Proc = ReadLnProc) then
   begin
@@ -5341,19 +3819,16 @@ begin
     if Scanner.Token = toLParen then
     begin
       NextToken;
-      T := ParseVariableRef();
+      T := ParseVariableRef;
 
       if T = dtText then
       begin
-        EmitI('pop hl');
-        EmitI('ld (__cur_file),hl');
+        EmitI('-> __cur_file');
 
         while Scanner.Token = toComma do
         begin
           NextToken;
-
-          EmitI('ld hl,(__cur_file)');
-          EmitI('push hl');
+          EmitI('__cur_file');
 
           T := ParseVariableRef;
 
@@ -5370,8 +3845,7 @@ begin
             EmitCall(LookupBuiltInOrFail('TextReadFloat'))
           else if T^.Kind = scEnumType then
           begin
-            EmitI('ld hl,' + T^.Tag);
-            EmitI('push hl');
+            EmitI(T^.Tag);
             EmitCall(LookupBuiltInOrFail('TextReadEnum'));
           end
           else
@@ -5386,22 +3860,18 @@ begin
 
         if (Proc = ReadLnProc) and (T^.Kind <> scStringType) then
         begin
-          EmitI('ld hl,(__cur_file)');
-          EmitI('push hl');
+          EmitI('__cur_file');
           EmitCall(LookupBuiltInOrFail('TextSkipToEoln'));
         end;
       end
       else if T^.Kind = scFileType then
       begin
-        EmitI('pop hl');
-        EmitI('ld (__cur_file),hl');
+        EmitI('-> __cur_file');
 
         while Scanner.Token = toComma do
         begin
           NextToken;
-
-          EmitI('ld hl,(__cur_file)');
-          EmitI('push hl');
+          EmitI('__cur_file');
 
           TT := ParseVariableRef;
           if TT <> T^.DataType then Error('Type mismatch');
@@ -5411,16 +3881,13 @@ begin
       end
       else
       begin
-        EmitI('call __getline');
-
-        EmitI('pop hl');
+        EmitI('pas_getline');
         EmitReadConsole(T);
         if IOMode then EmitCall(LookupBuiltInOrFail('BDosThrow'));
         while Scanner.Token = toComma do
         begin
           NextToken;
-          T := ParseVariableRef();
-          EmitI('pop hl');
+          T := ParseVariableRef;
           EmitReadConsole(T);
           if IOMode then EmitCall(LookupBuiltInOrFail('BDosThrow'));
         end;
@@ -5429,7 +3896,8 @@ begin
       Expect(toRParen);
       NextToken;
     end
-    else EmitI('call __getline');
+    else
+      EmitI('pas_getline');
   end
   else if (Proc = WriteProc) or (Proc = WriteLnProc) then
   begin
@@ -5439,17 +3907,11 @@ begin
     begin
       NextToken;
 
-      T := ParseExpression();
+      T := ParseExpression;
 
       if T = dtText then
       begin
-        EmitI('pop hl');
-
-        EmitI('ld (__cur_file),hl');
-        EmitSpace(256);
-        EmitI('ld hl,0');
-        EmitI('add hl,sp');
-        EmitI('ld (__text_buf), hl');
+        EmitI('-> __cur_file');
 
         while Scanner.Token = toComma do
         begin
@@ -5458,8 +3920,7 @@ begin
           T := ParseExpression;
           F := ParseFormat;
 
-          EmitI('ld hl,(__text_buf)');
-          EmitI('push hl');
+          EmitI('__text_buf');
 
           V := dtString;
 
@@ -5469,33 +3930,24 @@ begin
             2: EmitStr2(T, V); (* Broken? *)
           end;
 
-          EmitI('ld hl,(__cur_file)');
-          EmitI('push hl');
-          EmitI('ld hl,(__text_buf)');
-          EmitI('call __loadstr');
+          EmitI('__cur_file __text_buf');
           EmitCall(LookupBuiltInOrFail('TextWriteStr'));
         end;
 
-        EmitClear(256);
-
         if Proc = WriteLnProc then
         begin
-          EmitI('ld hl,(__cur_file)');
-          EmitI('push hl');
+          EmitI('__cur_file');
           EmitCall(LookupBuiltInOrFail('TextWriteEoln'));
         end;
       end
       else if T^.Kind = scFileType then
       begin
-        EmitI('pop hl');
-        EmitI('ld (__cur_file),hl');
+        EmitI('-> __cur_file');
 
         while Scanner.Token = toComma do
         begin
           NextToken;
-
-          EmitI('ld hl,(__cur_file)');
-          EmitI('push hl');
+          EmitI('__cur_file');
 
           TT := ParseVariableRef;
           if TT <> T^.DataType then Error('Type mismatch');
@@ -5516,7 +3968,7 @@ begin
         while Scanner.Token = toComma do
         begin
           NextToken;
-          T := ParseExpression();
+          T := ParseExpression;
           case ParseFormat of
             0: EmitWrite(T);
             1: EmitWrite1(T);
@@ -5524,13 +3976,14 @@ begin
           end;
         end;
 
-        if Proc = WriteLnProc then EmitI('call __newline');
+        if Proc = WriteLnProc then EmitI('cr');
       end;
 
       Expect(toRParen);
       NextToken;
     end
-    else if Proc = WriteLnProc then EmitI('call __newline');
+    else if Proc = WriteLnProc then
+      EmitI('cr');
   end
   else if Proc = IncProc then
   begin
@@ -5538,38 +3991,17 @@ begin
     Expect(toLParen);
     NextToken;
     V := ParseVariableRef;
-    if (V^.Kind = scPointerType) or (IsOrdinal(V) and (V^.Value = 2)) then
+    if V^.Kind = scPointerType then
     begin
-      if (V^.Kind = scPointerType) and (V <> dtPointer) then
-        Size := V^.DataType^.Value
-      else
-        Size := 1;
-
       if Scanner.Token = toComma then
       begin
         NextToken;
         TypeCheck(dtInteger, ParseExpression, tcExpr);
-        if Size <> 1 then
-        begin
-          EmitI('ld hl,' + IntToStr(Size));
-          EmitI('pop de');
-          EmitI('call __mul16');
-          EmitI('ld bc,hl');
-        end
-        else EmitI('pop bc');
-        EmitI('pop hl');
-        EmitI('call __inc16by');
       end
-      else
-      begin
-        if Size <> 1 then
-        begin
-          EmitI('ld bc,' + IntToStr(Size));
-          EmitI('pop hl');
-          EmitI('call __inc16by');
-        end
-        else EmitInc(dtInteger);
-      end;
+      else EmitLiteral(1);
+      if V <> dtPointer then
+        EmitI(IR4TupleExprStr(V^.DataType^.IrC, V^.DataType^.IrI, V^.DataType^.IrA, V^.DataType^.IrF) + ' *');
+      EmitI('pas_inc_a');
     end
     else if IsOrdinal(V) then
     begin
@@ -5577,16 +4009,11 @@ begin
       begin
         NextToken;
         TypeCheck(dtInteger, ParseExpression, tcExpr);
-        EmitI('pop bc');
-        EmitI('pop hl');
-        EmitI('ld a,(hl)');
-        EmitI('add a,c');
-        EmitI('ld (hl),a');
+        if IsIR4IntType(V) then EmitI('pas_inc_i') else EmitI('pas_inc_b');
       end
       else EmitInc(V);
     end
     else Error('Ordinal or pointer type expected');
-
     Expect(toRParen);
     NextToken;
   end
@@ -5596,38 +4023,17 @@ begin
     Expect(toLParen);
     NextToken;
     V := ParseVariableRef;
-    if (V^.Kind = scPointerType) or (IsOrdinal(V) and (V^.Value = 2)) then
+    if V^.Kind = scPointerType then
     begin
-      if (V^.Kind = scPointerType) and (V <> dtPointer) then
-        Size := V^.DataType^.Value
-      else
-        Size := 1;
-
       if Scanner.Token = toComma then
       begin
         NextToken;
         TypeCheck(dtInteger, ParseExpression, tcExpr);
-        if Size <> 1 then
-        begin
-          EmitI('ld hl,' + IntToStr(Size));
-          EmitI('pop de');
-          EmitI('call __mul16');
-          EmitI('ld bc,hl');
-        end
-        else EmitI('pop bc');
-        EmitI('pop hl');
-        EmitI('call __dec16by');
       end
-      else
-      begin
-        if Size <> 1 then
-        begin
-          EmitI('ld bc,' + IntToStr(Size));
-          EmitI('pop hl');
-          EmitI('call __dec16by');
-        end
-        else EmitDec(dtInteger);
-      end;
+      else EmitLiteral(1);
+      if V <> dtPointer then
+        EmitI(IR4TupleExprStr(V^.DataType^.IrC, V^.DataType^.IrI, V^.DataType^.IrA, V^.DataType^.IrF) + ' *');
+      EmitI('0 swap - pas_inc_a');
     end
     else if IsOrdinal(V) then
     begin
@@ -5635,16 +4041,12 @@ begin
       begin
         NextToken;
         TypeCheck(dtInteger, ParseExpression, tcExpr);
-        EmitI('pop bc');
-        EmitI('pop hl');
-        EmitI('ld a,(hl)');
-        EmitI('sub a,c');
-        EmitI('ld (hl),a');
+        EmitI('0 swap -');
+        if IsIR4IntType(V) then EmitI('pas_inc_i') else EmitI('pas_inc_b');
       end
       else EmitDec(V);
     end
     else Error('Ordinal or pointer type expected');
-
     Expect(toRParen);
     NextToken;
   end
@@ -5677,7 +4079,8 @@ begin
     Expect(toLParen);
     NextToken;
 
-    if ParseExpression^.Kind <> scStringType then Error('String expected');
+    ExprType := ParseExpression;
+    if ExprType^.Kind <> scStringType then Error('String expected');
 
     Expect(toComma);
     NextToken;
@@ -5694,23 +4097,16 @@ begin
     end
     else
     begin
-      EmitI('ld hl,__val_dummy');
-      EmitI('push hl');
+      EmitI(AllocIR4TempTuple(0, 1, 0, 0));
       U := nil;
     end;
 
     if T = dtInteger then
-      EmitI('call __val_int')
+      EmitI('pas_val_int')
     else if T^.Kind = scEnumType then
-    begin
-      EmitI('ld de,' + T^.Tag);
-      EmitI('call __val_enum');
-    end
+      EmitI(T^.Tag + ' pas_val_enum')
     else
-      EmitI('call __val_float');
-
-    if U = nil then
-      EmitI('jp c,__val_error');
+      EmitI('pas_val_float');
 
     Expect(toRParen);
     NextToken;
@@ -5724,14 +4120,8 @@ begin
     NextToken;
     T := ParseVariableAccess(Sym);
 
-    // EmitI('pop hl');
-    // EmitI('ld e,(hl)');
-    // EmitI('inc hl');
-    // EmitI('ld d,(hl)');
-    // EmitI('push de');
-
-    EmitLiteral(T^.DataType^.Value);
-    EmitCall(LookupBuiltInOrFail('GetMem'));
+    EmitI(IR4TupleExprStr(T^.DataType^.IrC, T^.DataType^.IrI, T^.DataType^.IrA, T^.DataType^.IrF));
+    EmitI('heapalloc swap a!');
 
     Expect(toRParen); NextToken;
   end
@@ -5741,21 +4131,8 @@ begin
 
     T := ParseExpression;
     if T^.Kind <> scPointerType then Error('Pointer type needed');
-    (*
-    Expect(toIdent);
-    Sym := LookupGlobal(Scanner.StrValue);
-    if Sym = nil then Error('Identifier "' + Scanner.StrValue + '" not found.');
-    NextToken;
-    T := ParseVariableAccess(Sym);
-    *)
-    // EmitI('pop hl');
-    // EmitI('ld e,(hl)');
-    // EmitI('inc hl');
-    // EmitI('ld d,(hl)');
-    // EmitI('push de');
 
-    EmitLiteral(T^.DataType^.Value);
-    EmitCall(LookupBuiltInOrFail('FreeMem'));
+    EmitI('heapfree');
 
     Expect(toRParen); NextToken;
   end
@@ -5781,10 +4158,7 @@ begin
     Expect(toRParen);
     NextToken;
 
-    EmitI('pop bc');
-    EmitI('pop de');
-    EmitI('pop hl');
-    EmitI('call __fillchar');
+    EmitI('memfill');
   end
   else if Proc = AssignProc then
   begin
@@ -5795,7 +4169,8 @@ begin
     if T^.Kind <> scFileType then Error('File type expected');
     Expect(toComma);
     NextToken;
-    if ParseExpression^.Kind <> scStringType then Error('String expected');
+    ExprType := ParseExpression;
+    if ExprType^.Kind <> scStringType then Error('String expected');
     Expect(toRParen);
     NextToken;
 
@@ -5805,7 +4180,7 @@ begin
       EmitCall(LookupBuiltInOrFail('TextAssign'))
     else
     begin
-      EmitLiteral(T^.DataType^.Value);
+      EmitI(IR4TupleExprStr(T^.DataType^.IrC, T^.DataType^.IrI, T^.DataType^.IrA, T^.DataType^.IrF));
       EmitCall(LookupBuiltInOrFail('FileAssign'));
     end;
   end
@@ -5822,7 +4197,18 @@ begin
     begin
       Expect(toComma);
       NextToken;
-      if ParseExpression^.Kind <> scStringType then Error('String expected');
+      ExprType := ParseExpression;
+    if ExprType^.Kind <> scStringType then Error('String expected');
+    end
+    else if ((Proc = ResetProc) or (Proc = RewriteProc)) and ((T = dtFile) or (T^.DataType = dtFile)) then
+    begin
+      if Scanner.Token = toComma then
+      begin
+        NextToken;
+        if OrdinalBase(ParseExpression) <> dtInteger then Error('Integer expected');
+      end
+      else
+        EmitI('128');
     end;
 
     Expect(toRParen);
@@ -5889,7 +4275,8 @@ begin
       NextToken;
       ParseVariableRef; (* Actual bytes, check for integer!? *)
     end
-    else EmitLiteral(0);
+    else
+      EmitI('0 i>a');
 
     Expect(toRParen);
     NextToken;
@@ -6015,9 +4402,9 @@ begin
     if Scanner.Token = toComma then NextToken;
   end;
 
-  S := '$' + IntToHex(Bits[0], 2);
-  for I := 1 to 31 do S := S + ',$' + IntToHex(Bits[I], 2);
-  EmitI('db ' + S);
+  S := '0x' + IntToHex(Bits[0], 2) + ' :i8';
+  for I := 1 to 31 do S := S + ' 0x' + IntToHex(Bits[I], 2) + ' :i8';
+  EmitI(S);
 
   Sym := CreateSymbol(scSetType, '');
   Sym^.Value := 32;
@@ -6036,10 +4423,7 @@ function ParseSet: PSymbol;
 var
   Sym, AType, BType: PSymbol;
 begin
-  EmitI('call __set_empty');
-  EmitI('ex de,hl');
-  EmitI('add hl,sp');
-  EmitI('push hl');
+  EmitI(AllocIR4Temp(32) + ' pas_set_empty');
 
   AType := nil;
   while Scanner.Token <> toRBrack do
@@ -6055,26 +4439,17 @@ begin
       NextToken;
       CheckElement(BType, CheckScalar(ParseExpression));
 
-      EmitI('pop bc');
-      EmitI('pop de');
-      EmitI('pop hl');
-      EmitI('push hl');
-      EmitI('call __setinclude_range');
+      EmitI('pas_set_range');
     end
     else
     begin
-      EmitI('pop de');
-      EmitI('pop hl');
-      EmitI('push hl');
-      EmitI('call __setinclude');
+      EmitI('pas_set_incl');
     end;
 
     AType := BType;
 
     if Scanner.Token = toComma then NextToken;
   end;
-
-  EmitI('pop hl');
 
   Sym := CreateSymbol(scSetType, '');
   Sym^.Value := 32;
@@ -6098,9 +4473,10 @@ begin
   begin
     Sym := LookupGlobalOrFail(Scanner.StrValue);
 
-    (* This is a dirty hack, but ok for now. *)
-    if (Sym^.Kind = scVar) and (Sym^.Tag = 'RESULT') then
-      Sym := Sym^.Prev^.Prev;
+    (* A function's return variable shares its name; skip past it to find the
+       actual function symbol for recursive calls (including forward funcs). *)
+    while (Sym <> nil) and (Sym^.Kind = scVar) and (Sym^.Tag = 'RESULT') do
+      Sym := Lookup(Sym^.Name, Sym^.Prev, nil);
 
     if (Sym^.Kind = scVar) and (Sym^.IsMagic) then
     begin
@@ -6120,17 +4496,11 @@ begin
     begin
       T := Sym^.DataType;
       if T = dtReal then
-      begin
-        EmitI('constfp ' + Sym^.Tag);
-        EmitI('pushfp');
-      end
+        EmitI(Sym^.Tag)
       else
       begin
         if Sym^.Tag <> '' then
-        begin
-          EmitI('ld hl,' + Sym^.Tag);
-          EmitI('call __loadstr');
-        end
+          EmitI(Sym^.Tag)
         else
           EmitLiteral(Sym^.Value);
       end;
@@ -6143,17 +4513,10 @@ begin
     else if Sym^.Kind = scFunc then
     begin
       T := Sym^.DataType; (* Type = Type(func) *)
-      if Sym^.IsStdCall then
-      begin
-        (* For string return types, __loadstr/string ops expect 256 bytes on the
-           stack (same convention as for string value parameters).  Reserve the
-           full 256 bytes so that the result slot has the right size. *)
-        if T^.Kind = scStringType then EmitSpace(256)
-        else if T.Value = 1 then EmitLiteral(0)
-        else EmitSpace(T.Value); (* Result *)
-      end;
       NextToken;
       ParseArguments(Sym);
+      if T^.Kind in [scStringType, scSetType, scArrayType, scRecordType] then
+        EmitI(AllocIR4TempTuple(T^.IrC, T^.IrI, T^.IrA, T^.IrF));
       EmitCall(Sym);
     end
     else if Sym^.Kind in [scType,scEnumType] then
@@ -6161,7 +4524,7 @@ begin
       NextToken;
       Expect(toLParen);
       NextToken;
-      CheckScalar(ParseExpression());
+      CheckScalar(ParseExpression);
       Expect(toRParen);
       NextToken;
 
@@ -6184,17 +4547,13 @@ begin
     begin
       T := dtString;
       Tag := AddString(S);
-      EmitI('ld hl,' + Tag);
-      EmitI('push hl');
-      EmitLoad(T);
+      EmitI(Tag);
     end;
   end
   else if Scanner.Token = toFloat then
   begin
     T := dtReal;
-    //Tag := AddString(Scanner.StrValue + ' ');
-    EmitI('constfp ' + EncodeReal(Scanner.StrValue));
-    EmitI('pushfp');
+    EmitI(Scanner.StrValue);
     NextToken;
   end
   else if Scanner.Token = toNumber then
@@ -6206,7 +4565,7 @@ begin
   else if Scanner.Token = toNil then
   begin
     T := dtPointer;
-    EmitLiteral(0);
+    EmitI('0 i>a');
     NextToken;
   end
   (* true false + String constants *)
@@ -6218,7 +4577,7 @@ begin
   begin
     NextToken;
 
-    T := ParseSet();
+    T := ParseSet;
 
     Expect(toRBrack);
     NextToken;
@@ -6227,7 +4586,7 @@ begin
   begin
     Op := Scanner.Token;
     NextToken;
-    T := ParseFactor();
+    T := ParseFactor;
 
     (* Like the binary operators, compute anything integral in 16 bit. Turbo
        Pascal 3 does the same: not B for a Byte B = 1 yields -2, not 254. *)
@@ -6332,8 +4691,7 @@ begin
       T := TypeCheck(dtString, T, tcExact);
       NextToken;
       T := TypeCheck(dtString, ParseTerm, tcExact);
-      EmitI('call __stradd');
-      EmitClear(256);
+      EmitI(AllocIR4Temp(256) + ' pas_stradd');
     end
   end
   else if T = dtReal then
@@ -6363,7 +4721,7 @@ end;
  * Parses an expression, which can be one simple expression or two simple
  * expressions connected by a relational operator.
  *)
-function ParseExpression: PSymbol;
+function ParseExpression;
 var
   Op: TToken;
   T, U: PSymbol;
@@ -6408,6 +4766,8 @@ begin
       EmitStrOp(Op)
     else if T = dtReal then
       EmitFloatOp(Op)
+    else if T^.Kind = scPointerType then
+      EmitPtrOp(Op)
     else
       EmitRelOp(Op);
     T := dtBoolean;                       // We know it will be Boolean.
@@ -6430,8 +4790,6 @@ begin
 
   T := ParseVariableAccess(Sym);
 
-  //if not (T^.Kind in [scType, scEnumType]) then Error('" ' + Sym^.Name + '" is not a simple type.');
-
   Expect(toBecomes);
   NextToken;
 
@@ -6439,7 +4797,6 @@ begin
      check returns: TypeCheck reduces a subrange to its base type, and storing
      with that would write two bytes into a one byte variable. *)
   TypeCheck(T, ParseExpression, tcAssign);
-
   EmitStore(T);
 end;
 
@@ -6455,30 +4812,38 @@ procedure ParseStatement(ContTarget, BreakTarget: String); forward;
 procedure ParseWithVar;
 var
   Sym, Field, FieldRef, DataType: PSymbol;
-  Address: Integer;
+  Slot: TIR4Tuple;
 begin
   Expect(toIdent);
   Sym := LookupGlobalOrFail(Scanner.StrValue);
   if Sym^.Kind <> scVar then Error('Variable expected');
   NextToken;
 
-  Offset := Offset - 2;
-  Address := Offset;
+  Slot := IR4Frame;
+  Inc(IR4Frame.A);
+  if IR4Frame.A > IR4MaxFrame.A then IR4MaxFrame.A := IR4Frame.A;
   DataType := ParseVariableAccess(Sym);
-
   if DataType^.Kind <> scRecordType then Error('Record type expected');
-
+  if (Slot.C = 0) and (Slot.I = 0) and (Slot.A = 0) and (Slot.F = 0) then
+    EmitI('_locals a!')
+  else
+    EmitI('_locals ' + IR4TupleExprStr(Slot.C, Slot.I, Slot.A, Slot.F) + ' a+ a!');
   Field := DataType^.DataType;
   while Field <> nil do
   begin
-    FieldRef := CreateSymbol(scVar, ''); // Create anonymously so duplicate
-    FieldRef^.Name := Field^.Name;       // identifiers are not a problem
+    FieldRef := CreateSymbol(scVar, '');
+    FieldRef^.Name := Field^.Name;
     FieldRef^.DataType := Field^.DataType;
-    FieldRef^.Value := Address;
-    FieldRef^.Value2 := Field^.Value;
+    FieldRef^.IrC := Slot.C;
+    FieldRef^.IrI := Slot.I;
+    FieldRef^.IrA := Slot.A;
+    FieldRef^.IrF := Slot.F;
+    FieldRef^.WithC := Field^.IrC;
+    FieldRef^.WithI := Field^.IrI;
+    FieldRef^.WithA := Field^.IrA;
+    FieldRef^.WithF := Field^.IrF;
     FieldRef^.IsRef := True;
     FieldRef^.Level := Level;
-    // WriteLn('Create ' , Field^.Name, ' at level ', Level, 'in ', Sym^.Name, ' address ', Address, ' Offset ', Field^.Value);
     Field := Field^.Prev;
   end;
 end;
@@ -6491,156 +4856,32 @@ end;
 procedure ParseWith(ContTarget, BreakTarget: String);
 var
   OldSymbols: PSymbol;
-  Count, I: Integer;
+  OldBase, SavedFrame: TIR4Tuple;
 begin
   OldSymbols := SymbolTable;
+  SavedFrame := IR4Frame;
+  OldBase := IR4BaseFrame;
 
   ParseWithVar;
-  Count := 1;
 
   while Scanner.Token = toComma do
   begin
     NextToken;
     ParseWithVar;
-    Inc(Count);
   end;
 
   Expect(toDo);
   NextToken;
 
-  // TODO Check global (not in unit tests), Local, Var, Nested, Comma
-  // Optimize simple case 'with R do X := 5;' to avoid double addressing
-
-  // TODO What happens to the stack if we exit a with statement early via
-  // Break or Exit?
+  IR4BaseFrame := IR4Frame;
 
   ParseStatement(ContTarget, BreakTarget);
 
-  Offset := Offset + 2 * Count;
-  for I := 1 to Count do EmitI('pop bc');
+  IR4BaseFrame := OldBase;
+  IR4Frame := SavedFrame;
 
   while SymbolTable <> OldSymbols do
     FreeAndNilSymbol(SymbolTable);
-end;
-
-(**
- * Parses an inline term, which is, in the easiest case, a number representing
- * a Z80 opcode, but can also refer to identifiers such as constants, variables,
- * procedures or functions (in which case either the value or the address would
- * be inserted into the outgoing assembly code). The special symbol "*" refers
- * to the "current address" and allows PC-relative addressing (useful for
- * relative jumps).
- *)
-procedure ParseInlineTerm(var S: String; var W: Boolean);
-var
-  Sym: PSymbol;
-begin
-  if Scanner.Token = toNumber then
-  begin
-    S := S + IntToStr(Scanner.NumValue);
-    if Scanner.NumValue > 255 then W := True;
-    NextToken;
-  end
-  else if Scanner.Token = toIdent then
-  begin
-    Sym := LookupGlobalOrFail(Scanner.StrValue);
-
-    if (Sym^.Kind = scConst) and (Sym^.DataType = dtInteger) then
-    begin
-      S := S + IntToStr(Sym^.Value);
-      if Sym^.Value > 255 then W := True;
-    end
-    else if (Sym^.Kind = scVar) and (Sym^.Level = 0) then
-    begin
-      S := S + Sym^.Tag;
-      W := True;
-    end
-    else if (Sym^.Kind = scVar) and (Sym^.Level > 0) then
-    begin
-      S := S + IntToStr(Sym^.Value);
-      W := True;
-    end
-    else if (Sym^.Kind = scProc) or (Sym^.Kind = scFunc) then
-    begin
-      S := S + Sym^.Tag;
-      W := True;
-    end
-    else
-      Error(S + ' not allowed here');
-
-    NextToken;
-  end
-  else if Scanner.Token = toMul then
-  begin
-    S := S + '$';
-    W := True;
-    NextToken;
-  end
-  else if (Scanner.Token = toString) and (Length(Scanner.StrValue) = 1) then
-  begin
-    S := S + IntToStr(Ord(Scanner.StrValue[1]));
-    NextToken;
-  end
-  else Error('Invalid inline code');
-end;
-
-(**
- * Parses a single expression inside an inline statement, which is mainly a list
- * of inline terms connected by additive or subtractive operators.
- *)
-procedure ParseInlineExpr;
-var
-  S: String;
-  W: Boolean;
-  O: TToken;
-begin
-  S := '';
-  W := False;
-  O := toNone;
-
-  if Scanner.Token in [toLt, toGt] then
-  begin
-    O := Scanner.Token;
-    NextToken;
-  end;
-
-  ParseInlineTerm(S, W);
-  while Scanner.Token in [toAdd, toSub] do
-  begin
-    W := True;
-    if Scanner.Token = toAdd then S := S + '+' else S := S + '-';
-    NextToken;
-    ParseInlineTerm(S, W);
-  end;
-
-  if O = toLt then
-    EmitI('db lo(' + S + ')')
-  else if (O = toGt) or W then
-    EmitI('dw ' + S)
-  else EmitI('db ' + S);
-end;
-
-(**
- * Parses an inline statement including the opening and closing parentheses. It
- * consists of a number of inline expressions separated by "/" characters.
- *)
-procedure ParseInline;
-begin
-  Expect(toLParen);
-  NextToken;
-
-  if Scanner.Token <> toRParen then
-  begin
-    ParseInlineExpr;
-    while Scanner.Token = toDiv do
-    begin
-      NextToken;
-      ParseInlineExpr;
-    end;
-  end;
-
-  Expect(toRParen);
-  NextToken;
 end;
 
 procedure ParseCaseLabel(T: PSymbol; OfTarget: String);
@@ -6650,20 +4891,10 @@ begin
   CheckElement(T, ParseScalarRange(Low, High));
 
   if High = Low then
-  begin
-    EmitI('ld hl,' + IntToStr(High));
-    EmitI('call __int16_eq');
-    EmitI('and a');
-    EmitI('jp nz,' + OfTarget);
-  end
+    EmitI(IR4CaseTemp + ' @ ' + IntToStr(High) + ' = 0 = jz ' + OfTarget)
   else
-  begin
-    EmitI('ld bc,' + IntToStr(Low));
-    EmitI('ld hl,' + IntToStr(High));
-    EmitI('call __int16_case');
-    EmitI('and a');
-    EmitI('jp nz,' + OfTarget);
-  end;
+    EmitI(IR4CaseTemp + ' @ ' + IntToStr(Low) + ' >= ' +
+          IR4CaseTemp + ' @ ' + IntToStr(High) + ' <= and 0 = jz ' + OfTarget);
 end;
 
 procedure ParseStatementList(ContTarget, BreakTarget: String); forward;
@@ -6671,14 +4902,20 @@ procedure ParseStatementList(ContTarget, BreakTarget: String); forward;
 procedure ParseCaseStatement(ContTarget, BreakTarget: String);
 var
   T: PSymbol;
-  OfTarget, NextTest, EndTarget: String;
+  OfTarget, NextTest, EndTarget, SavedCase: String;
+  OldBase, SavedFrame: TIR4Tuple;
 begin
   EndTarget := GetLabel('end');
 
   NextToken;
   T := CheckScalar(ParseExpression);
 
-  EmitI('pop de');
+  SavedFrame := IR4Frame;
+  OldBase := IR4BaseFrame;
+  SavedCase := IR4CaseTemp;
+  IR4CaseTemp := AllocIR4TempTuple(0, 1, 0, 0);
+  IR4BaseFrame := IR4Frame;
+  EmitI(IR4CaseTemp + ' !');
 
   Expect(toOf);
   NextToken;
@@ -6698,12 +4935,12 @@ begin
     Expect(toColon);
     NextToken;
 
-    EmitI('jp ' + NextTest);
+    EmitJump(NextTest);
 
     Emit(OfTarget, '', '');
 
     ParseStatement(ContTarget, BreakTarget);
-    EmitI('jp ' + EndTarget);
+    EmitJump(EndTarget);
     Emit(NextTest, '', '');
 
     if Scanner.Token <> toSemicolon then Break;
@@ -6718,6 +4955,10 @@ begin
 
   Emit(EndTarget, '', '');
 
+  IR4CaseTemp := SavedCase;
+  IR4BaseFrame := OldBase;
+  IR4Frame := SavedFrame;
+
   Expect(toEnd);
   NextToken;
 end;
@@ -6727,14 +4968,15 @@ end;
  * an assignment, a label or a piece of inline assembly, or a compound statement
  * like if/while/repeat/for or a begin..end block.
  *)
-procedure ParseStatement(ContTarget, BreakTarget: String);
+procedure ParseStatement;
 var
   Sym: PSymbol;
   Tag, Tag2, Tag3, Tag4: String;
+  StartTmp, CntTmp: String;
+  OldBase, SavedFrame: TIR4Tuple;
   Delta: Integer;
   T: PSymbol;
 begin
-  if CheckBreak then EmitI('call __checkbreak');
 
   if Scanner.Token = toNumber then
   begin
@@ -6781,33 +5023,17 @@ begin
     else if (Sym^.Kind = scFunc) and (Sym^.IsMagic) then
     begin
       T := ParseBuiltInFunction(Sym);
-      if T = dtReal then EmitI('popfp')
-      else if T^.Kind = scStringType then EmitClear(256)
-      else EmitI('pop hl');
+      EmitI('drop');
     end
     else if Sym^.Kind = scFunc then
     begin
       T := Sym^.DataType;
-      if Sym^.IsStdCall then
-      begin
-        if T^.Kind = scStringType then EmitSpace(256)
-        else if T^.Value = 1 then EmitLiteral(0)
-        else EmitSpace(T^.Value);
-      end;
       NextToken;
       ParseArguments(Sym);
+      if T^.Kind in [scStringType, scSetType, scArrayType, scRecordType] then
+        EmitI(AllocIR4TempTuple(T^.IrC, T^.IrI, T^.IrA, T^.IrF));
       EmitCall(Sym);
-      if Sym^.IsStdCall then
-      begin
-        if T^.Kind = scStringType then EmitClear(256)
-        else if T^.Value = 1 then EmitClear(2)
-        else EmitClear(T^.Value);
-      end
-      else
-      begin
-        if T = dtReal then EmitI('popfp')
-        else EmitI('pop hl');
-      end;
+      EmitI('drop');
     end
     else if (Sym^.Kind = scVar) and (Sym^.IsMagic) then
     begin
@@ -6842,7 +5068,7 @@ begin
     if Scanner.Token = toElse then
     begin
       Tag2 := GetLabel('endif');
-      EmitI('jp ' + Tag2);
+      EmitJump(Tag2);
 
       Emit(Tag, '', '');
 
@@ -6872,7 +5098,7 @@ begin
 
     ParseStatement(Tag, Tag2);
 
-    EmitI('jp ' + Tag);         (* TODO Move this elsewhere. *)
+    EmitJump(Tag);         (* TODO Move this elsewhere. *)
     Emit(Tag2, '', '');
   end
   else if Scanner.Token = toRepeat then
@@ -6915,69 +5141,41 @@ begin
     EmitAddress(Sym);
     NextToken; Expect(toBecomes); NextToken; TypeCheck(Sym^.DataType, ParseExpression, tcAssign);
 
-    Emit('', 'pop de', 'Keep untruncated start value');
-    Emit('', 'pop hl', '');
-    Emit('', 'push de', '');
-    Emit('', 'push hl', '');
-    Emit('', 'push de', '');
-
+    SavedFrame := IR4Frame;
+    OldBase := IR4BaseFrame;
+    StartTmp := AllocIR4TempTuple(0, 1, 0, 0);
+    CntTmp := AllocIR4TempTuple(0, 1, 0, 0);
+    IR4BaseFrame := IR4Frame;
+    EmitI('dup ' + StartTmp + ' !');
     EmitStore(Sym^.DataType);
-
-    if Scanner.Token = toTo then
-      Delta := 1
-    else if Scanner.Token = toDownTo then
-      Delta := -1
-    else
-      Error('"to" or "downto" expected.');
-
-    NextToken; TypeCheck(Sym^.DataType, ParseExpression, tcAssign); Expect(toDo); (* final value on stack *)
-
+    if Scanner.Token = toTo then Delta := 1
+    else if Scanner.Token = toDownTo then Delta := -1
+    else Error('"to" or "downto" expected.');
+    NextToken; TypeCheck(Sym^.DataType, ParseExpression, tcAssign); Expect(toDo);
+    EmitI(CntTmp + ' !');
     Tag := GetLabel('forloop');
     Tag3 := GetLabel('forbreak');
     Tag4 := GetLabel('fornext');
-
-    (* Flipping the sign bits turns the signed comparison into an unsigned one
-       without changing the difference. Neither inc hl nor push touch the
-       carry, and a count of 0 after the inc means 65536 iterations. *)
-
-    Emit('', 'pop de', 'Compute iteration count');
-    Emit('', 'pop hl', '');
-    if Delta = 1 then Emit('', 'ex de,hl', '');
-    Emit('', 'ld a,h', '');
-    Emit('', 'xor $80', '');
-    Emit('', 'ld h,a', '');
-    Emit('', 'ld a,d', '');
-    Emit('', 'xor $80', '');
-    Emit('', 'ld d,a', '');
-    Emit('', 'sbc hl,de', '');
-    Emit('', 'inc hl', '');
-    Emit('', 'push hl', '');
-    Emit('', 'jp c,' + Tag3, '');
-
-    Offset := Offset - 2;
-
+    EmitI(StartTmp + ' @ ' + CntTmp + ' @');
+    if Delta = 1 then EmitI('<=') else EmitI('>=');
+    EmitJumpIf(False, Tag3);
+    if Delta = 1 then
+      EmitI(CntTmp + ' @ ' + StartTmp + ' @ - ' + CntTmp + ' !')
+    else
+      EmitI(StartTmp + ' @ ' + CntTmp + ' @ - ' + CntTmp + ' !');
     Emit(Tag, '', '');
-
     NextToken;
     ParseStatement(Tag4, Tag3);
-
     Emit(Tag4, '', '');
-
-    Emit('', 'pop hl', 'Count down and check');
-    Emit('', 'dec hl', '');
-    Emit('', 'push hl', '');
-    Emit('', 'ld a,h', '');
-    Emit('', 'or l', '');
-    Emit('', 'jp z,' + Tag3, '');
-
+    EmitI(CntTmp + ' @ 0 <>');
+    EmitJumpIf(False, Tag3);
+    EmitI(CntTmp + ' @ 1 - ' + CntTmp + ' !');
     EmitAddress(Sym);
     if Delta = 1 then EmitInc(Sym^.DataType) else EmitDec(Sym^.DataType);
-
     EmitJump(Tag);
-
-    Emit(Tag3, 'pop de', 'Cleanup count'); (* Cleanup loop variable *)
-
-    Offset := Offset + 2;
+    Emit(Tag3, '', '');
+    IR4BaseFrame := OldBase;
+    IR4Frame := SavedFrame;
   end
   else if Scanner.Token = toCase then
   begin
@@ -6989,10 +5187,7 @@ begin
     ParseWith(ContTarget, BreakTarget);
   end
   else if Scanner.Token = toInline then
-  begin
-    NextToken;
-    ParseInline;
-  end
+    Error('Inline assembly not supported')
   else if Scanner.Token = toGoto then
   begin
     NextToken;
@@ -7001,13 +5196,13 @@ begin
     begin
       Sym := LookupLocalOrFail(Scanner.StrValue);
       // ...
-      EmitI('jp ' + Sym^.Tag);
+      EmitJump(Sym^.Tag);
     end
     else if Scanner.Token = toNumber then
     begin
       Sym := LookupLocalOrFail(IntToStr(Scanner.NumValue));
       // ...
-      EmitI('jp ' + Sym^.Tag);
+      EmitJump(Sym^.Tag);
     end
     else Error('Ident or number expected');
 
@@ -7018,39 +5213,65 @@ end;
 function ParseTypeDef: PSymbol; forward;
 
 (**
- * Parses a typed constant (aka an initialized variable). Typed constants are
- * always allocated statically.
+ * Parses a constant declaration, which can either be a real constant or a
+ * so-called typed constant, which is basically an initialized variable.
  *)
-procedure ParseConstValue(DataType: PSymbol);
-var
-  I, Value, Offset: Integer;
-  Sym, T: PSymbol;
-  Test: Boolean;
-  S: String;
+procedure EmitIR4GlobalDecl((* const *) Tag: String; DataType: PSymbol);
 begin
+  while DataType^.Kind = scAliasType do DataType := DataType^.DataType;
+  if IsIR4IntType(DataType) then
+    EmitI('var ' + Tag + ' :i')
+  else if DataType = dtReal then
+    EmitI('var ' + Tag + ' :f')
+  else if DataType^.Kind = scPointerType then
+    EmitI('var ' + Tag + ' :a')
+  else
+    EmitI('var ' + Tag + ' :bytes ' + IntToStr(IR4MaxBytes(DataType^.IrC, DataType^.IrI, DataType^.IrA, DataType^.IrF)));
+end;
+
+procedure EmitIR4ConstAddr((* const *) BaseExpr: String; C, I, A, F: Integer);
+begin
+  if (C = 0) and (I = 0) and (A = 0) and (F = 0) then
+    EmitI(BaseExpr)
+  else
+    EmitI(BaseExpr + ' ' + IR4TupleExprStr(C, I, A, F) + ' a+');
+end;
+
+procedure ParseIR4ConstInit((* const *) BaseExpr: String; DataType: PSymbol; C, I, A, F: Integer);
+var
+  Idx, K, Value, First, Last, RC, RI, RA, RF: Integer;
+  Sym, T, ElemT, BType: PSymbol;
+  Test: Boolean;
+  S, ValStr: String;
+  Bits: array[0..31] of Byte;
+begin
+  while DataType^.Kind = scAliasType do DataType := DataType^.DataType;
   if (DataType^.Kind = scArrayType) and (DataType^.DataType = dtChar) and (Scanner.Token in [toString, toCaret]) then
   begin
     S := ParseStringLiteral;
-
     if Length(S) <> DataType^.IndexType^.High - DataType^.IndexType^.Low + 1 then
       Error('String length mismatch');
-
-    for I := 1 to Length(S) do
-      EmitI('db ' + IntToStr(Ord(S[I])));
+    for K := 1 to Length(S) do
+    begin
+      EmitI(IntToStr(Ord(S[K])));
+      EmitIR4ConstAddr(BaseExpr, C + K - 1, I, A, F);
+      EmitI('i8!');
+    end;
   end
   else if DataType^.Kind = scArrayType then
   begin
     Expect(toLParen);
     NextToken;
-
-    for I := DataType^.IndexType^.Low to DataType^.IndexType^.High - 1 do
+    ElemT := DataType^.DataType;
+    RC := C; RI := I; RA := A; RF := F;
+    for Idx := DataType^.IndexType^.Low to DataType^.IndexType^.High - 1 do
     begin
-      ParseConstValue(DataType^.DataType);
+      ParseIR4ConstInit(BaseExpr, ElemT, RC, RI, RA, RF);
+      Inc(RC, ElemT^.IrC); Inc(RI, ElemT^.IrI); Inc(RA, ElemT^.IrA); Inc(RF, ElemT^.IrF);
       Expect(toComma);
       NextToken;
     end;
-    ParseConstValue(DataType^.DataType);
-
+    ParseIR4ConstInit(BaseExpr, ElemT, RC, RI, RA, RF);
     Expect(toRParen);
     NextToken;
   end
@@ -7058,107 +5279,114 @@ begin
   begin
     Expect(toLParen);
     NextToken;
-
-    Offset := 0;
     Test := True;
     while Test do
     begin
       Test := False;
-
       if Scanner.Token = toIdent then
       begin
         Sym := Lookup(Scanner.StrValue, DataType^.DataType, nil);
         if Sym = nil then Error('Unknown field "' + Scanner.StrValue + '"');
-
-        if Sym^.Value < Offset then Error('Invalid offset');
-        if Sym^.Value > Offset then
-        begin
-          EmitI(ZeroFill(Sym^.Value - Offset));
-          Offset := Sym^.Value;
-        end;
-
         NextToken;
         Expect(toColon);
         NextToken;
-
-        ParseConstValue(Sym^.DataType);
-
-        Offset := Offset + Sym^.DataType^.Value;
+        ParseIR4ConstInit(BaseExpr, Sym^.DataType, C + Sym^.IrC, I + Sym^.IrI, A + Sym^.IrA, F + Sym^.IrF);
       end;
-
       if Scanner.Token = toSemicolon then
       begin
         Test := True;
         NextToken;
       end;
     end;
-
-    if Offset < DataType^.Value then
-      EmitI(ZeroFill(DataType^.Value - Offset));
-
     Expect(toRParen);
     NextToken;
   end
   else if DataType = dtReal then
   begin
+    ValStr := '';
     if Scanner.Token = toSub then
     begin
+      ValStr := '-';
       NextToken;
-      Expect(toFloat);
-      Emit('', 'dw ' + EncodeReal('-' + Scanner.StrValue), '');
-    end
+    end;
+    if Scanner.Token = toNumber then
+      ValStr := ValStr + IntToStr(Scanner.NumValue) + '.0'
     else
     begin
       Expect(toFloat);
-      Emit('', 'dw ' + EncodeReal(Scanner.StrValue), '');
+      ValStr := ValStr + Scanner.StrValue;
     end;
-
     NextToken;
+    EmitI(ValStr);
+    if Copy(BaseExpr, 1, 3) = '-> ' then
+      EmitI(BaseExpr)
+    else
+    begin
+      EmitIR4ConstAddr(BaseExpr, C, I, A, F);
+      EmitI('f!');
+    end;
   end
   else if DataType^.Kind = scStringType then
   begin
     S := ParseStringLiteral;
-    Emit('', 'db ' + EncodeAsmStr(S), '');
-    if Length(S) < DataType^.Value - 1 then
-      Emit('', ZeroFill(DataType^.Value - Length(S) - 1), '');
+    EmitIR4ConstAddr(BaseExpr, C, I, A, F);
+    EmitI(AddString(S) + ' ' + IntToStr(DataType^.Value - 1) + ' pas_strcopy_clamp drop');
   end
   else if DataType^.Kind = scSetType then
   begin
     Expect(toLBrack);
     NextToken;
-
-    CheckElement(DataType^.DataType, ParseSetConstant^.DataType);
-
+    for K := 0 to 31 do Bits[K] := 0;
+    BType := nil;
+    while Scanner.Token <> toRBrack do
+    begin
+      T := CheckElement(BType, ParseScalarRange(First, Last));
+      if (First < 0) or (First > 255) or (Last < 0) or (Last > 255) then
+        Error('Value out of range');
+      if Last < First then Error('Invalid range');
+      BType := T;
+      for K := First to Last do
+        Bits[K shr 3] := Bits[K shr 3] or (1 shl (K and 7));
+      if Scanner.Token = toComma then NextToken;
+    end;
+    if BType <> nil then CheckElement(DataType^.DataType, BType);
+    for K := 0 to 31 do
+      if Bits[K] <> 0 then
+      begin
+        EmitI(IntToStr(Bits[K]));
+        EmitIR4ConstAddr(BaseExpr, C + K, I, A, F);
+        EmitI('i8!');
+      end;
     Expect(toRBrack);
     NextToken;
   end
   else
   begin
     T := ParseScalar(Value);
-
     while DataType^.Kind in [scAliasType, scSubrangeType] do
       DataType := DataType^.DataType;
-
     if not ((DataType = T) or (DataType = dtByte) and (T = dtInteger)) then
       Error('Type error');
-
-    if DataType^.Value = 1 then
-    begin
-      if (Value < 0) or (Value > 255) then Error('Type error');
-      Emit('', 'db ' + IntToStr(Value), '');
-    end
+    EmitI(IntToStr(Value));
+    if Copy(BaseExpr, 1, 3) = '-> ' then
+      EmitI(BaseExpr)
     else
-      Emit('', 'dw ' + IntToStr(Value), '')
+    begin
+      EmitIR4ConstAddr(BaseExpr, C, I, A, F);
+      if IsIR4IntType(DataType) then
+        EmitI('!')
+      else
+      begin
+        if (Value < 0) or (Value > 255) then Error('Type error');
+        EmitI('i8!');
+      end;
+    end;
   end;
 end;
 
-(**
- * Parses a constant declaration, which can either be a real constant or a
- * so-called typed constant, which is basically an initialized variable.
- *)
 procedure ParseConst;
 var
-  Name, S: String;
+  Name, S, BaseExpr: String;
   Sym, Sym2: PSymbol;
   Sign: Integer;
 begin
@@ -7171,16 +5399,25 @@ begin
     NextToken;
 
     Sym := CreateSymbol(scVar, Name);
-    Sym^.DataType := ParseTypeDef();
+    Sym^.DataType := ParseTypeDef;
     Sym^.Tag := GetLabel('const');
     Sym^.Level := 0; (* Force global *)
-
-    Emit(Sym^.Tag, '', '');
 
     Expect(toEq);
     NextToken;
 
-    ParseConstValue(Sym^.DataType);
+    EmitIR4GlobalDecl(Sym^.Tag, Sym^.DataType);
+    IR4Buffering := True;
+    EmitI('init');
+    if IsIR4ScalarType(Sym^.DataType) then
+      BaseExpr := '-> ' + Sym^.Tag
+    else
+      BaseExpr := Sym^.Tag;
+    ParseIR4ConstInit(BaseExpr, Sym^.DataType, 0, 0, 0, 0);
+    EmitI('end');
+    IR4Buffering := False;
+    EmitStrings(nil);
+    FlushIR4Chunks;
   end
   else
   begin
@@ -7226,9 +5463,9 @@ begin
       begin
         Sym^.DataType := dtReal;
         if Sign = -1 then
-          Sym^.Tag := EncodeReal('-' + Scanner.StrValue)
+          Sym^.Tag := '-' + Scanner.StrValue
         else
-          Sym^.Tag := EncodeReal(Scanner.StrValue)
+          Sym^.Tag := Scanner.StrValue;
       end
       else
       begin
@@ -7265,7 +5502,7 @@ end;
  * Parses a field group, that is, a comma-separated list of record field names
  * with a single type specification.
  *)
-procedure ParseFieldGroup(var Fields: PSymbol; var Offset: Integer);
+procedure ParseFieldGroup(var Fields: PSymbol; var Offset: Integer; var RC, RI, RA, RF: Integer);
 var
   Sym, Typ: PSymbol;
   Len, I: Integer;
@@ -7282,15 +5519,23 @@ begin
 
   Expect(toColon);
   NextToken;
-  Typ := ParseTypeDef();
+  Typ := ParseTypeDef;
 
   Offset := Offset + Len * Typ^.Value;
+  RC := RC + Len * Typ^.IrC;
+  RI := RI + Len * Typ^.IrI;
+  RA := RA + Len * Typ^.IrA;
+  RF := RF + Len * Typ^.IrF;
   Sym := Fields;
 
   for I := 1 to Len do
   begin
     Sym^.DataType := Typ;
     Sym^.Value := Offset - I * Typ^.Value;
+    Sym^.IrC := RC - I * Typ^.IrC;
+    Sym^.IrI := RI - I * Typ^.IrI;
+    Sym^.IrA := RA - I * Typ^.IrA;
+    Sym^.IrF := RF - I * Typ^.IrF;
     Sym := Sym^.Prev;
   end;
 end;
@@ -7302,11 +5547,13 @@ procedure ParseRecord(RecSym: PSymbol);
 var
   Sym, CaseType: PSymbol;
   FixedSize, VariantSize, Dummy: Integer;
+  FixC, FixI, FixA, FixF: Integer;
+  VarC, VarI, VarA, VarF: Integer;
   Ident: String;
 begin
   while Scanner.Token = toIdent do
   begin
-    ParseFieldGroup(RecSym^.DataType, RecSym^.Value);
+    ParseFieldGroup(RecSym^.DataType, RecSym^.Value, RecSym^.IrC, RecSym^.IrI, RecSym^.IrA, RecSym^.IrF);
     if Scanner.Token <> toSemicolon then Break;
     NextToken;
   end;
@@ -7329,10 +5576,18 @@ begin
       Sym^.Name := Ident;
       Sym^.DataType := CaseType;
       Sym^.Value := RecSym^.Value;
+      Sym^.IrC := RecSym^.IrC;
+      Sym^.IrI := RecSym^.IrI;
+      Sym^.IrA := RecSym^.IrA;
+      Sym^.IrF := RecSym^.IrF;
       Sym^.Prev := RecSym^.DataType;
       RecSym^.DataType := Sym;
 
       RecSym^.Value := RecSym^.Value + CaseType^.Value;
+      RecSym^.IrC := RecSym^.IrC + CaseType^.IrC;
+      RecSym^.IrI := RecSym^.IrI + CaseType^.IrI;
+      RecSym^.IrA := RecSym^.IrA + CaseType^.IrA;
+      RecSym^.IrF := RecSym^.IrF + CaseType^.IrF;
 
       NextToken;
     end
@@ -7343,6 +5598,8 @@ begin
 
     FixedSize := RecSym^.Value;
     VariantSize := FixedSize;
+    FixC := RecSym^.IrC; FixI := RecSym^.IrI; FixA := RecSym^.IrA; FixF := RecSym^.IrF;
+    VarC := FixC; VarI := FixI; VarA := FixA; VarF := FixF;
 
     Expect(toOf);
     NextToken;
@@ -7364,7 +5621,12 @@ begin
 
       ParseRecord(RecSym);
       if RecSym^.Value > VariantSize then VariantSize := RecSym^.Value;
+      if RecSym^.IrC > VarC then VarC := RecSym^.IrC;
+      if RecSym^.IrI > VarI then VarI := RecSym^.IrI;
+      if RecSym^.IrA > VarA then VarA := RecSym^.IrA;
+      if RecSym^.IrF > VarF then VarF := RecSym^.IrF;
       RecSym^.Value := FixedSize;
+      RecSym^.IrC := FixC; RecSym^.IrI := FixI; RecSym^.IrA := FixA; RecSym^.IrF := FixF;
 
       Expect(toRParen);
       NextToken;
@@ -7374,6 +5636,7 @@ begin
     end;
 
     RecSym^.Value := VariantSize;
+    RecSym^.IrC := VarC; RecSym^.IrI := VarI; RecSym^.IrA := VarA; RecSym^.IrF := VarF;
   end;
 end;
 
@@ -7385,6 +5648,8 @@ end;
  * TODO Allow C-style array sizes with array[n] meaning array[0..n-1]?
  *)
 procedure ParseArray(DataType: PSymbol; First: Boolean);
+var
+  Count: Integer;
 begin
   if First then
   begin
@@ -7410,10 +5675,15 @@ begin
     Expect(toOf);
     NextToken;
 
-    DataType^.DataType := ParseTypeDef();
+    DataType^.DataType := ParseTypeDef;
   end;
 
-  DataType^.Value := (DataType^.IndexType^.High - DataType^.IndexType^.Low + 1) * DataType^.DataType^.Value;
+  Count := DataType^.IndexType^.High - DataType^.IndexType^.Low + 1;
+  DataType^.Value := Count * DataType^.DataType^.Value;
+  DataType^.IrC := Count * DataType^.DataType^.IrC;
+  DataType^.IrI := Count * DataType^.DataType^.IrI;
+  DataType^.IrA := Count * DataType^.DataType^.IrA;
+  DataType^.IrF := Count * DataType^.DataType^.IrF;
 end;
 
 (**
@@ -7421,10 +5691,11 @@ end;
  * a pointer, a set, a range, or a reference to an existing type (and
  * potentially nested, of course).
  *)
-function ParseTypeDef: PSymbol;
+function ParseTypeDef;
 var
   DataType, Sym: PSymbol;
-  I: Integer;
+  I, K: Integer;
+  EnumStrs: array[0..255] of String[31];
 begin
   if Scanner.Token = toArray then
   begin
@@ -7447,7 +5718,7 @@ begin
         Sym := LookupGlobalOrFail(Scanner.StrValue);
         if Sym^.Kind <> scConst then Error('Not a constant: ' + Scanner.StrValue);
         TypeCheck(dtInteger, Sym^.DataType, tcAssign);
-        DataType^.Value := Sym.Value + 1;
+        DataType^.Value := Sym^.Value + 1;
       end
       else
       begin
@@ -7459,6 +5730,7 @@ begin
       NextToken;
     end
     else DataType^.Value := 256;
+    DataType^.IrC := DataType^.Value;
   end
   else if Scanner.Token = toFile then
   begin
@@ -7472,6 +5744,7 @@ begin
       (* Same FileRec layout as an untyped file: the component size and
          count are fields inside it, not extra storage. *)
       DataType^.Value := dtFile^.Value;
+      DataType^.IrC := dtFile^.IrC;
     end
     else DataType := dtFile;
   end
@@ -7500,11 +5773,13 @@ begin
       Error('Base type too large');
 
     DataType^.Value := 32;
+    DataType^.IrC := 32;
   end
   else if Scanner.Token = toCaret then
   begin
     DataType := CreateSymbol(scPointerType, '');
     DataType^.Value := 2;
+    DataType^.IrA := 1;
     NextToken;
 
     if Scanner.Token = toIdent then
@@ -7520,10 +5795,8 @@ begin
     DataType := CreateSymbol(scEnumType, '');
     DataType^.Tag := GetLabel('enumlit');
     DataType^.Value := 1;
+    DataType^.IrC := 1;
     I := 0;
-
-    Emit(DataType^.Tag, '', '');
-    Emit('', 'db ' + DataType^.Tag + '_cnt', '');
 
     repeat
       NextToken;
@@ -7531,16 +5804,20 @@ begin
 
       Sym := CreateSymbol(scConst, Scanner.StrValue);
       Sym^.Value := I;
-      // Sym^.Value2 := AddString(Sym^.Name);
 
-      Emit('', 'dw ' + AddString(Sym^.Name), '');
+      if I < 256 then EnumStrs[I] := AddString(Sym^.Name);
 
       Sym^.DataType := DataType;
       I := I + 1;
       NextToken;
     until Scanner.Token <> toComma;
 
-    Emit(DataType^.Tag + '_cnt', 'equ ' + IntToStr(I), '');
+    EmitStrings(nil);
+    EmitI('data ' + DataType^.Tag);
+    EmitI(IntToStr(I));
+    for K := 0 to I - 1 do
+      EmitI('& ' + EnumStrs[K]);
+    EmitI('end');
 
     DataType^.Low := 0;
     DataType^.High := I - 1;
@@ -7570,9 +5847,15 @@ begin
       (* A negative lower bound needs the full 16 bit: loading a byte sized
          variable zero-extends, which would turn -100 into 156. *)
       if (DataType^.Low >= 0) and (DataType^.High < 256) then
-        DataType^.Value := 1
+      begin
+        DataType^.Value := 1;
+        DataType^.IrC := 1;
+      end
       else
+      begin
         DataType^.Value := 2;
+        DataType^.IrI := 1;
+      end;
 
       NextToken;
     end
@@ -7586,9 +5869,15 @@ begin
       (* A negative lower bound needs the full 16 bit: loading a byte sized
          variable zero-extends, which would turn -100 into 156. *)
       if (DataType^.Low >= 0) and (DataType^.High < 256) then
-        DataType^.Value := 1
+      begin
+        DataType^.Value := 1;
+        DataType^.IrC := 1;
+      end
       else
+      begin
         DataType^.Value := 2;
+        DataType^.IrI := 1;
+      end;
     end;
   end
   else if Scanner.Token = toString then
@@ -7607,6 +5896,7 @@ begin
     DataType^.High := Ord(Scanner.StrValue[1]);
 
     DataType^.Value := 1;
+    DataType^.IrC := 1;
 
     NextToken;
   end
@@ -7620,6 +5910,7 @@ begin
       DataType := CreateSymbol(scSubrangeType, '');
       DataType^.DataType := Sym^.DataType;
       DataType^.Value := 1;
+      DataType^.IrC := 1;
 
       Sym := LookupGlobalOrFail(Scanner.StrValue);
       DataType^.Low := Sym^.Value;
@@ -7639,9 +5930,15 @@ begin
         (* A negative lower bound needs the full 16 bit: loading a byte sized
            variable zero-extends, which would turn -100 into 156. *)
         if (DataType^.Low >= 0) and (DataType^.High < 256) then
-          DataType^.Value := 1
+        begin
+          DataType^.Value := 1;
+          DataType^.IrC := 1; DataType^.IrI := 0;
+        end
         else
+        begin
           DataType^.Value := 2;
+          DataType^.IrC := 0; DataType^.IrI := 1;
+        end;
       end
       else
       begin
@@ -7651,9 +5948,15 @@ begin
         (* A negative lower bound needs the full 16 bit: loading a byte sized
            variable zero-extends, which would turn -100 into 156. *)
         if (DataType^.Low >= 0) and (DataType^.High < 256) then
-          DataType^.Value := 1
+        begin
+          DataType^.Value := 1;
+          DataType^.IrC := 1; DataType^.IrI := 0;
+        end
         else
+        begin
           DataType^.Value := 2;
+          DataType^.IrC := 0; DataType^.IrI := 1;
+        end;
       end;
 
       NextToken;
@@ -7694,7 +5997,7 @@ begin
     while DataType^.Kind = scAliasType do
       DataType := DataType^.DataType;
 
-    if not (DataType.Kind in [scType, scArrayType, scRecordType, scEnumType, scStringType, scSetType, scSubrangeType, scPointerType, scFileType]) then Error('Type expected');
+    if not (DataType^.Kind in [scType, scArrayType, scRecordType, scEnumType, scStringType, scSetType, scSubrangeType, scPointerType, scFileType]) then Error('Type expected');
   end;
 
   NextToken;
@@ -7730,7 +6033,7 @@ end;
  * group), that is, a comma separated list of variable identifiers followed by a
  * type name or definition.
  *)
-procedure ParseVarList();
+procedure ParseVarList;
 var
   Old: PSymbol;
   DataType, Sym: PSymbol;
@@ -7782,14 +6085,12 @@ begin
     Old := Old^.Next;
     if Old^.Kind = scVar then
     begin
-      if AbsCode and (DataType^.Value <= 32) then Old^.Level := 0;
-
       SetDataType(Old, DataType, False);
       if IsAbs then Old^.Tag := Tag
       else if Old^.Level = 0 then
       begin
         Old^.Tag := GetLabel('global');
-        Emit(Old^.Tag, ZeroFill(Old^.DataType^.Value), 'Global ' + Old^.Name);
+        EmitIR4GlobalDecl(Old^.Tag, Old^.DataType);
       end;
     end;
 
@@ -7874,6 +6175,7 @@ var
   NewSym, ResVar, FwdSym, P: PSymbol;
   Token: TToken;
   S: String;
+  I: Integer;
   IsRef: Boolean;
 begin
   Token := Scanner.Token;
@@ -7882,18 +6184,18 @@ begin
   FwdSym := Lookup(Scanner.StrValue, SymbolTable, CurrentScope);
   if (FwdSym <> nil) and (FwdSym^.IsForward) then
   begin
-    if Token = toProcedure then
-      NewSym := CreateSymbol(scProc, '')
-    else
-      NewSym := CreateSymbol(scFunc, '');
-
-    if NewSym^.Kind <> FwdSym^.Kind then Error('Proc/Func mismatch');
+    if ((Token = toProcedure) and (FwdSym^.Kind <> scProc)) or
+       ((Token = toFunction) and (FwdSym^.Kind <> scFunc)) then
+      Error('Proc/Func mismatch');
 
     FwdSym^.IsForward := False;
 
     OpenScope(True);
+    IR4Frame.C := FwdSym^.IrC;
+    IR4Frame.I := FwdSym^.IrI;
+    IR4Frame.A := FwdSym^.IrA;
+    IR4Frame.F := FwdSym^.IrF;
 
-    NewSym^.Tag := FwdSym^.Tag;
     if FwdSym^.SavedParams <> nil then
     begin
       P := FwdSym^.SavedParams;
@@ -7929,15 +6231,12 @@ begin
     OpenScope(True);
   end;
 
-  NewSym^.IsStdCall := True;
-
   if FwdSym = nil then
   begin
     if Token = toFunction then
     begin
-      CreateSymbol(scVar, Scanner.StrValue)^.Tag := 'RESULT';
-      //SetDataType(SymbolTable, dtInteger, 0);
-      ResVar := SymbolTable;
+      ResVar := CreateSymbol(scVar, Scanner.StrValue);
+      ResVar^.Tag := 'RESULT';
     end;
     NextToken;
 
@@ -7975,10 +6274,19 @@ begin
       Expect(toColon);
       NextToken;
 
-      NewSym^.DataType := ParseTypeRef();
+      NewSym^.DataType := ParseTypeRef;
       ResVar^.DataType := NewSym^.DataType;
 
       if NewSym^.DataType^.Kind = scFileType then Error('Files types not allowed as return values.');
+
+      ResVar^.IrC := IR4Frame.C;
+      ResVar^.IrI := IR4Frame.I;
+      ResVar^.IrA := IR4Frame.A;
+      ResVar^.IrF := IR4Frame.F;
+      Inc(IR4Frame.C, ResVar^.DataType^.IrC);
+      Inc(IR4Frame.I, ResVar^.DataType^.IrI);
+      Inc(IR4Frame.A, ResVar^.DataType^.IrA);
+      Inc(IR4Frame.F, ResVar^.DataType^.IrF);
     end;
 
     AdjustOffsets;
@@ -8003,19 +6311,38 @@ begin
       else if Scanner.Token = toForward then
       begin
         NewSym^.IsForward := True;
-        (* Callers before the body need to know where it will live. *)
-        NewSym^.Banked := Banked;
-        NewSym^.BankNo := CurrentBank;
         NextToken;
+        S := 'fwd ' + NewSym^.Tag + ' (';
+        for I := 0 to NewSym^.Value - 1 do
+        begin
+          if NewSym^.ArgIsRef[I] then
+            S := S + ' p' + IntToStr(I) + ' :a'
+          else if NewSym^.ArgTypes[I] = dtReal then
+            S := S + ' p' + IntToStr(I) + ' :f'
+          else if NewSym^.ArgTypes[I]^.Kind in [scPointerType, scStringType, scSetType, scArrayType, scRecordType] then
+            S := S + ' p' + IntToStr(I) + ' :a'
+          else
+            S := S + ' p' + IntToStr(I) + ' :i';
+        end;
+        if NewSym^.Kind = scFunc then
+        begin
+          if NewSym^.DataType^.Kind in [scStringType, scSetType, scArrayType, scRecordType] then
+            S := S + ' p_sret :a';
+          if NewSym^.DataType = dtReal then
+            S := S + ' -> :f'
+          else if NewSym^.DataType^.Kind in [scPointerType, scStringType, scSetType, scArrayType, scRecordType] then
+            S := S + ' -> :a'
+          else
+            S := S + ' -> :i';
+        end;
+        S := S + ' )';
+        EmitI(S);
       end
       else
       begin
-        S := LowerCase(Scanner.StrValue);
-        if S = 'stdcall' then
-          NewSym^.IsStdCall := True
-        else if S = 'register' then
-          NewSym^.IsStdCall := False
-        else Error('Unknown modifier ' + S);
+        S := LowerStr(Scanner.StrValue);
+        if (S <> 'stdcall') and (S <> 'register') then
+          Error('Unknown modifier ' + S);
 
         NextToken;
       end;
@@ -8026,6 +6353,10 @@ begin
 
     if NewSym^.IsForward then
     begin
+      NewSym^.IrC := IR4Frame.C;
+      NewSym^.IrI := IR4Frame.I;
+      NewSym^.IrA := IR4Frame.A;
+      NewSym^.IrF := IR4Frame.F;
       if SymbolTable^.Kind = scScope then
       begin
         NewSym^.SavedParams := nil
@@ -8042,27 +6373,10 @@ begin
 
   if not NewSym^.IsExternal and not NewSym^.IsForward then
   begin
-    if (Scanner.Token = toInline) then
-    begin
-      if SmartLink and (NewSym^.Level = 0) then
-        EmitI('if __USE' + NewSym^.Tag);
-      Emit(NewSym.Tag, '', '');
-      NextToken;
-      ParseInline;
-      EmitI('ret');
-      if SmartLink and (NewSym^.Level = 0) then
-        EmitI('endif');
-      Expect(toSemicolon);
-      NextToken;
-    end
+    if Scanner.Token = toInline then
+      Error('Inline assembly not supported')
     else
     begin
-      if (FwdSym <> nil) and ((NewSym^.Banked <> Banked) or (Banked and (NewSym^.BankNo <> CurrentBank))) then
-        Error('Forward declaration and body must be in the same overlay');
-      NewSym^.Banked := Banked;
-      NewSym^.BankNo := CurrentBank;
-      //if Banked then WriteLn('Proc/Func ', NewSym^.Name, ' is in bank ', CurrentBank);
-
       ParseBlock(NewSym);
       Expect(toSemicolon);
       NextToken;
@@ -8075,189 +6389,6 @@ begin
 end;
 
 (**
- * Checks whether the given platform supports overlays.
- *)
-function SupportsOverlays(Binary: TBinaryType; Format: TTargetFormat): Boolean;
-begin
-  case Binary of
-    btAgon:   SupportsOverlays := Format = tfBinary;
-    btCPM,
-    btZX:     SupportsOverlays := False;
-    btZX128,
-    btZXN:    SupportsOverlays := True;
-  end;
-end;
-
-(**
- * Checks whether overlay markers take effect in the current build. Overlays
- * only holds what the user asked for (--no-ovr), so it survives switching
- * machine or format in interactive mode.
- *)
-function OverlaysActive: Boolean;
-begin
-  OverlaysActive := Overlays and SupportsOverlays(Binary, Format);
-end;
-
-procedure ParseOverlay(Sym: PSymbol);
-var
-  S, T: String;
-  Start: Integer;
-  OldStrings: PStringLiteral;
-begin
-  if CurrentOverlay = 10 then Error('Too many overlays');
-
-  CurrentBank := ToastrackBanks[CurrentOverlay];
-  if Odd(CurrentOverlay) then Start := $E000 else Start := $C000;
-
-  S := IntToStr(CurrentOverlay);
-  T := IntToStr(Start);
-
-  Emit('OLD_ORG_' + S, 'equ $', '');
-  EmitI('slot 3');
-  EmitI('page ' + IntToStr(CurrentBank));
-  EmitI('org ' + T);
-  Emit('OVR_' + S + '_PAGE', 'equ $$', '');
-
-  Banked := True;
-  OldStrings := Strings;
-
-  while Scanner.Token = toOverlay do
-  begin
-    NextToken;
-
-    if not ((Scanner.Token = toProcedure) or (Scanner.Token = toFunction)) then
-      Error('Procedure or function expected');
-
-    ParseProcFunc(Sym);
-  end;
-
-  EmitStrings(OldStrings);
-
-  Emit('OVR_' + S + '_START', 'equ ' + T, '');
-  Emit('OVR_' + S + '_END', 'equ $', '');
-
-  if not Odd(CurrentOverlay) then
-  begin
-    EmitI('if $ > 0xe000');
-    EmitI('LUA');
-    EmitI('sj.error("Write outside overlay memory at: 57344")');
-    EmitI('ENDLUA');
-    EmitI('endif');
-  end;
-
-  EmitI('slot 3');
-  EmitI('page 0');
-  EmitI('org OLD_ORG_' + S);
-
-  Banked := False;
-
-  Inc(CurrentOverlay);
-end;
-
-procedure ParseNextOverlay(Sym: PSymbol);
-var
-  S, T: String;
-  Start: Integer;
-  OldStrings: PStringLiteral;
-begin
-  if CurrentOverlay = 64 then Error('Too many overlays');
-
-  CurrentBank := CurrentOverlay + 32;
-  //WriteLn('CurrentPage: ', CurrentBank);
-  Start := $E000;
-
-  S := IntToStr(CurrentOverlay);
-  T := IntToStr(Start);
-
-  Emit('OLD_ORG_' + S, 'equ $', '');
-  EmitI('slot 7');
-  EmitI('page ' + IntToStr(CurrentBank));
-  EmitI('org ' + T);
-  Emit('OVR_' + S + '_PAGE', 'equ $$', '');
-
-  Banked := True;
-  OldStrings := Strings;
-
-  while Scanner.Token = toOverlay do
-  begin
-    NextToken;
-
-    if not ((Scanner.Token = toProcedure) or (Scanner.Token = toFunction)) then
-      Error('Procedure or function expected');
-
-    ParseProcFunc(Sym);
-  end;
-
-  EmitStrings(OldStrings);
-
-  //EmitI('display "Page:", $$');
-
-  Emit('OVR_' + S + '_START', 'equ ' + T, '');
-  Emit('OVR_' + S + '_END', 'equ $', '');
-
-  //EmitI('slot 7');
-  //EmitI('page 32');
-  EmitI('org OLD_ORG_' + S);
-
-  Banked := False;
-
-  Inc(CurrentOverlay);
-end;
-
-procedure ParseAgonOverlay(Sym: PSymbol);
-var
-  S, T: String;
-  Start: Integer;
-  OldStrings: PStringLiteral;
-begin
-  if CurrentOverlay = 48 then Error('Too many overlays');
-
-  CurrentBank := CurrentOverlay + 8;
-  Start := $E000;
-
-  S := IntToStr(CurrentOverlay);
-  T := IntToStr(Start);
-
-  Emit('OLD_ORG_' + S, 'equ $', '');
-  EmitI('slot 7');
-  EmitI('page ' + IntToStr(CurrentBank));
-  EmitI('org ' + T);
-  Emit('OVR_' + S + '_PAGE', 'equ $$', '');
-//  EmitI('ld24 hl, $' + IntToHex($40000 + CurrentBank * 8192, 5));
-//  EmitI('ld24 de, $4e000');
-  EmitI('dw OVR_' + S + '_END-OVR_' + S + '_START');
-  EmitI('db 0');
-
-  Banked := True;
-  OldStrings := Strings;
-
-  while Scanner.Token = toOverlay do
-  begin
-    NextToken;
-
-    if not ((Scanner.Token = toProcedure) or (Scanner.Token = toFunction)) then
-      Error('Procedure or function expected');
-
-    ParseProcFunc(Sym);
-  end;
-
-  EmitStrings(OldStrings);
-
-  //EmitI('display "Page:", $$');
-
-  Emit('OVR_' + S + '_START', 'equ ' + T, '');
-  Emit('OVR_' + S + '_END', 'equ $', '');
-
-  //EmitI('slot 7');
-  //EmitI('page 32');
-  EmitI('org OLD_ORG_' + S);
-
-  Banked := False;
-
-  Inc(CurrentOverlay);
-end;
-
-(**
  * Parses a declaration part, which can contain the following elements any
  * number of times and in any order: constants, types, variables, labels,
  * procedures, and functions.
@@ -8267,7 +6398,7 @@ var
   OldSyms, P, T: PSymbol;
   Name: String;
 begin
-  while Scanner.Token in [toConst, toType, toVar, toLabel, toOverlay, toProcedure, toFunction] do
+  while Scanner.Token in [toConst, toType, toVar, toLabel, toProcedure, toFunction] do
   begin
     if Scanner.Token = toConst then
     begin
@@ -8330,7 +6461,7 @@ begin
     begin
       NextToken;
       repeat
-        parseVarList();
+        parseVarList;
         Expect(toSemicolon);
         NextToken;
       until Scanner.Token <> toIdent;
@@ -8339,29 +6470,14 @@ begin
     else if Scanner.Token = toLabel then
     begin
       NextToken;
-      parseLabelDef();
+      parseLabelDef;
       while Scanner.Token = toComma do
       begin
         NextToken;
-        parseLabelDef();
+        parseLabelDef;
       end;
       Expect(toSemicolon);
       NextToken;
-    end
-
-    else if Scanner.Token = toOverlay then
-    begin
-      if Level <> 0 then
-        Error('Overlays only allowed on top level');
-
-      if (Binary = btZX128) and OverlaysActive then
-        ParseOverlay(Sym)
-      else if (Binary = btZXN) and OverlaysActive then
-        ParseNextOverlay(Sym)
-      else if (Binary = btAgon) and OverlaysActive then
-        ParseAgonOverlay(Sym)
-      else
-        NextToken;
     end
 
     else if (Scanner.Token = toProcedure) or (Scanner.Token = toFunction) then
@@ -8373,13 +6489,15 @@ end;
  * Parses a statement list, which is a (possibly empty) list of statements
  * separated by semicolons.
  *)
-procedure ParseStatementList(ContTarget, BreakTarget: String);
+procedure ParseStatementList;
 begin
   ParseStatement(ContTarget, BreakTarget);
+  IR4Frame := IR4BaseFrame;
   while Scanner.Token = toSemicolon do
   begin
     NextToken;
     ParseStatement(ContTarget, BreakTarget);
+    IR4Frame := IR4BaseFrame;
   end;
 end;
 
@@ -8387,27 +6505,9 @@ end;
  * Parses a block, which is a set of declarations followed by a statement list
  * enclose in "begin" and "end".
  *)
-procedure ParseBlock(Sym: PSymbol);
-var
-  PrevBlock: PSymbol;
+procedure ParseBlock;
 begin
-  if SmartLink and (Sym <> nil) and (Sym^.Level = 0) then
-  begin
-    EmitI('if __USE' + Sym^.Tag);
-    (* Calls from nested procedures count as calls from this block. *)
-    PrevBlock := CurrentBlock;
-    CurrentBlock := Sym;
-  end;
-
   ParseDeclarations(Sym);
-
-  //if Sym = nil then
-    //WriteLn('Entering level ', Sym^.Level , ' block ', Sym^.Name)
-  //else
-  //begin
-    //Writeln('Entering main block');
-    //MainBlock := True;
-  //end;
 
   ExitTarget := GetLabel('exit');
   EmitPrologue(Sym);
@@ -8417,21 +6517,10 @@ begin
 
   ParseStatementList('', '');
 
-  //if Sym <> nil then
-    //WriteLn('Leaving level ', Sym^.Level , ' block ', Sym^.Name)
-  //else
-    //Writeln('Leaving main block');
-
   Expect(toEnd);
   NextToken;
 
   EmitEpilogue(Sym);
-
-  if SmartLink and (Sym <> nil) and (Sym^.Level = 0) then
-  begin
-    CurrentBlock := PrevBlock;
-    EmitI('endif');
-  end;
 end;
 
 (**
@@ -8441,41 +6530,57 @@ end;
  *)
 procedure ParseProgram;
 var
-  Sym: PSymbol;
+  Sym, BuiltInSym: PSymbol;
 begin
   OpenScope(False);
   RegisterAllBuiltIns;
 
-  SetLibrary(HomeDir + '/rtl/helpers.lua');
-
-  if Binary = btCPM then
-    OpenInput(HomeDir + '/rtl/cpm.pas')
-  else if Binary = btZX then
-    OpenInput(HomeDir + '/rtl/zx.pas')
-  else if Binary = btZX128 then
-    OpenInput(HomeDir + '/rtl/zx128.pas')
-  else if Binary = btAgon then
-    OpenInput(HomeDir + '/rtl/agon.pas')
+  if FSize(HomeDir + '/rtl/ir4.pas') <> -1 then
+    OpenInput(HomeDir + '/rtl/ir4.pas')
+  else if FSize(HomeDir + '/../pasta84/rtl/ir4.pas') <> -1 then
+    OpenInput(HomeDir + '/../pasta84/rtl/ir4.pas')
   else
-    OpenInput(HomeDir + '/rtl/next.pas');
-
-  NextToken;
-  ParseDeclarations(nil);
-
-  Expect(toEnd);
-  NextToken;
-  Expect(toPeriod);
-  NextToken;
+  begin
+    NewConst('ScreenWidth', dtInteger, 40);
+    NewConst('ScreenHeight', dtInteger, 25);
+    NextToken;
+    LastBuiltIn := SymbolTable;
+    Sym := nil;
+  end;
+  if FSize(HomeDir + '/rtl/ir4.pas') <> -1 then
+  begin
+    NextToken;
+    ParseDeclarations(nil);
+    Expect(toEnd);
+    NextToken;
+    Expect(toPeriod);
+    NextToken;
+  end
+  else if FSize(HomeDir + '/../pasta84/rtl/ir4.pas') <> -1 then
+  begin
+    NextToken;
+    ParseDeclarations(nil);
+    Expect(toEnd);
+    NextToken;
+    Expect(toPeriod);
+    NextToken;
+  end;
 
   LastBuiltIn := SymbolTable;
 
   Sym := Lookup('FileRec', LastBuiltIn, nil);
   if Sym <> nil then
-    LookupBuiltInOrFail('File')^.Value := Sym^.Value;
+  begin
+    BuiltInSym := LookupBuiltInOrFail('File');
+    BuiltInSym^.Value := Sym^.Value;
+  end;
 
   Sym := Lookup('TextRec', LastBuiltIn, nil);
   if Sym <> nil then
-    LookupBuiltInOrFail('Text')^.Value := Sym^.Value;
+  begin
+    BuiltInSym := LookupBuiltInOrFail('Text');
+    BuiltInSym^.Value := Sym^.Value;
+  end;
 
   OpenScope(False);
   if Scanner.Token = toProgram then
@@ -8488,30 +6593,10 @@ begin
   end;
   parseBlock(nil);
   Expect(toPeriod);
-(*
-  EmitC('');
-  Emit('globals', 'ds ' + IntToStr(Offset), 'Globals');
-*)
   EmitStrings(nil);
-  EmitC('');
-  Emit('display', 'ds 16,0', 'Display');
 
   CloseScope(False);
   CloseScope(False);
-
-  if CurrentOverlay <> 0 then
-  begin
-    EmitI('include "' + PosixToNative(HomeDir + '/rtl/overlays.asm"'));
-    if Binary = btAgon then
-      EmitI('include "' + PosixToNative(HomeDir + '/rtl/agonover.asm"'));
-
-    if Binary = btZX128 then
-      AddrLimit := $c000
-    else
-      AddrLimit := $e000;
-  end;
-
-  Emit('LIMIT', '= $' + IntToHex(AddrLimit, 4), '');
 end;
 
 (**
@@ -8519,23 +6604,23 @@ end;
  *)
 procedure ResetCompiler;
 begin
+  ClearIR4Chunks;
+  IR4FnSig := '';
+  IR4LineOpen := False;
+  IR4Frame.C := 0; IR4Frame.I := 0; IR4Frame.A := 0; IR4Frame.F := 0;
+  IR4BaseFrame := IR4Frame;
+  IR4MaxFrame := IR4Frame;
+  IR4CaseTemp := '';
   // Cannot use CloseScope because that might
   // trigger "unresolved forward" errors.
   while SymbolTable <> nil do
     FreeAndNilSymbol(SymbolTable);
 
-  while Code <> nil do
-    RemoveCode;
-
   C := #0;
 
-  ErrorLine := 0;
-  ErrorColumn := 0;
   Level := 0;
-  Offset := 0;
   Scanner.Token := toNone;
   CurrentScope := nil;
-  CurrentBlock := nil;
   LastBuiltIn := nil;
 
   ClearStrings;
@@ -8543,35 +6628,23 @@ begin
 
   Source := nil;
 
-  AbsCode := True;
-  CheckBreak := False;
   IOMode := True;
-  StackMode := False;
-
-  CurrentOverlay := 0;
-  Banked := False;
   Muted := 0;
 
-  BDosFunc := nil;
-  BDosHLFunc := nil;
   IfDefLevel := -1;
   ScannerMuted := False;
-  CurrentBank := 0;
   NextLabel := 0;
 
-  BinFile := '';
   AsmFile := '';
   ExitTarget := '';
 end;
 
 (**
- * Performs a build. All relevant information is assumed to be in the respective
- * global variables. The procedure does everything up to and including a
- * possible conversion to a specialized file format.
+ * Compiles the given source file to IR4 code.
  *)
 function Build: Integer;
 var
-  StartTime: Int64;
+  StartTime: {$ifndef SYS_IR4} Int64 {$else} Integer {$endif};
   Duration: Real;
 begin
   StartTime := GetMSCount;
@@ -8580,41 +6653,13 @@ begin
 
   ResetCompiler;
 
-  // WriteLn('[TotalAllocated=', GetHeapStatus.TotalAllocated, ']');
+  AsmFile := ChangeExt(SrcFile, '.ir4');
 
-  AsmFile := ChangeExt(SrcFile, '.z80');
-
-  if Binary = btCPM then
-    // Shorten to 8.3 for CP/M. SrcFile is absolute, so this is safe.
-    BinFile := ParentDir(SrcFile) + '/' + Copy(NameOnly(ChangeExt(SrcFile, '')), 1, 8) + '.com'
-  else if Format in [tfBinary, tfPlus3Dos, tfMOSlet] then
-    BinFile := ChangeExt(SrcFile, '.bin')
-  else if Format = tfRunDir then
-    BinFile := ChangeExt(SrcFile, '.run')
-  else if Format = tfTape then
-    BinFile := ChangeExt(SrcFile, '.tap')
-  else if Format = tfSnapshot then
-    BinFile := ChangeExt(SrcFile, '.sna');
-
-  if Binary = btCPM then
-    AddrOrigin := $0100
-  else if Binary = btAgon then
-    AddrOrigin := $0000
-  else if CustomOrigin <> 0 then
-    AddrOrigin := CustomOrigin
-  else
-    AddrOrigin := $8000;
-
-  if Binary = btCPM then
-    AddrLimit := $f000
-  else if (Binary = btAgon) and (Format = tfMOSlet) then
-    AddrLimit := $8000
-  else
-    AddrLimit := $10000;
-
+  {$ifndef SYS_IR4}
   HasStoredState := True;
 
   try
+  {$endif}
     if FSize(SrcFile) = -1 then
       Error('File "' + PosixToNative(FRelative(SrcFile)) + '" not found');
 
@@ -8627,29 +6672,12 @@ begin
     OpenInput(SrcFile);
     OpenTarget(AsmFile);
 
-    EmitHeader(HomeDir, SrcFile);  (* TODO Move this elsewhere. *)
+    EmitHeader(HomeDir, SrcFile);
     ParseProgram;
-    EmitFooter(BinFile);           (* TODO Move this elsewhere. *)
+    EmitFooter;
 
-    CloseTarget();
-    while Source <> nil do CloseInput();
-
-    Build := 3;
-
-    WriteLn('Assembling...');
-    WriteLn('  ', PosixToNative(FRelative(AsmFile)),
-            ' -> ', PosixToNative(FRelative(BinFile)));
-    WriteLn;
-
-    if Binary = btZXN then
-      Execute(SjAsmCmd,  '--zxnext --lst --syntax=abf --nologo --msg=err ''' + AsmFile + '''')
-    else
-      Execute(SjAsmCmd, '--lst --syntax=abf --nologo --msg=err ''' + AsmFile + '''');
-
-    if DosError <> 0 then
-      Error('Error ' + IntToStr(DosError) + ' starting assembler');
-    if DosExitCode <> 0 then
-      Error('Assembly failed (see output for details).');
+    CloseTarget;
+    while Source <> nil do CloseInput;
 
     Duration := (GetMSCount - StartTime) / 1000.0;
 
@@ -8658,6 +6686,7 @@ begin
     WriteLn(' build finished (', Duration:0:3, 's).');
 
     Build := 0;
+  {$ifndef SYS_IR4}
   except
     on E: ECompileError do ;
   end;
@@ -8665,467 +6694,21 @@ begin
   if Result = 2 then
   begin
     CloseTarget;
-    while Source <> nil do CloseInput();
-  end;
-
-  if (Result <> 3) and not KeepInt then
-  begin
-    DeleteFile(AsmFile);
-    DeleteFile(ChangeExt(AsmFile, '.lst'));
-    DeleteFile(ChangeExt(AsmFile, '.ldr'));
+    while Source <> nil do CloseInput;
   end;
 
   HasStoredState := False;
-end;
-
-(* --- Interactive Menu --- *)
-
-const
-  (**
-   * Printable names of supported platforms. Must be aligned with TBinaryType.
-   *)
-  BinaryStr: array[TBinaryType] of String = ('CP/M', 'ZX 48K', 'ZX 128K', 'ZX Next', 'Agon');
-
-  (**
-   * Printable names of supported formats. Must be aligned with TTargetFormat.
-   *)
-  FormatStr: array[TTargetFormat] of String = ('Raw binary', '+3DOS binary', 'Tape file', 'Snapshot', 'Runnable dir', 'MOSlet');
-
-  (**
-   * Yes/no strings. Why is this here and not in the IDE sestion?
-   *)
-  YesNoStr: array[Boolean] of String = ('No ', 'Yes');
-
-var
-  MainFile, WorkFile: String;
-
-(**
- * Reads a key from console.
- *)
-function GetKey: Char;
-var
-  C: Char;
-  K: TKeyEvent;
-begin
-  InitKeyboard;
-  WriteLn;
-  Write('>');
-
-  repeat
-    K:=GetKeyEvent;
-    K:=TranslateKeyEvent(K);
-  until GetKeyEventFlags(K) = kbASCII;
-
-  C := GetKeyEventChar(K);
-
-  WriteLn(C);
-  GetKey := C;
-  DoneKeyboard;
-end;
-
-(**
- * Asks the user for a filename.
- *)
-function GetFile(const S: String): String;
-var
-  T: String;
-begin
-  Write(S);
-  ReadLn(T);
-  if Length(T) <> 0 then
-  begin
-    if Pos('.', T) = 0 then T := T + '.pas';
-    GetFile := FAbsolute(NativeToPosix(T));
-  end;
-end;
-
-
-(**
- * Checks whether the given platform supports the given format.
- *)
-function SupportsFormat(Binary: TBinaryType; Format: TTargetFormat): Boolean;
-begin
-  case Binary of
-    btAgon:   SupportsFormat := Format in [tfBinary, tfMosLet];
-    btCPM:    SupportsFormat := Format = tfBinary;
-    btZX,
-    btZX128:  SupportsFormat := Format in [tfBinary, tfPlus3Dos, tfTape, tfSnapshot];
-    btZXN:    SupportsFormat := Format in [tfBinary, tfPlus3Dos, tfTape, tfRunDir];
-  end;
-end;
-
-(**
- * Changes the current directory.
- *)
-procedure DoDirectory;
-var
-  Dir: String;
-begin
-  Write('New directory: ');
-  ReadLn(Dir);
-  ChDir(Dir);
-end;
-
-(**
- * Changes the project's main file.
- *)
-procedure DoMainFile;
-begin
-  MainFile := GetFile('Main file name: ');
-end;
-
-(**
- * Changes the current work file.
- *)
-procedure DoWorkFile;
-begin
-  WorkFile := GetFile('Work file name: ');
-end;
-
-(**
- * Starts the editor. Asks for a file name, if necessary. Jumps to the error
- * line and column in case of a compile error.
- *)
-procedure DoEdit(Error: Boolean);
-var
-  S: String;
-begin
-  if Error then
-  begin
-    if AltEditor then
-      Execute(CodeCmd, '-g ''' + ErrorFile + ':' + IntToStr(ErrorLine) + ':' + IntToStr(ErrorColumn) + '''')
-    else
-      Execute(NanoCmd, '--minibar -Aicl --rcfile ''' + HomeDir + '/misc/pascal.nanorc'' +' + IntToStr(ErrorLine) + ',' + IntToStr(ErrorColumn) + ' ''' + ErrorFile + '''')
-  end
-  else
-  begin
-    if (WorkFile = '') and (MainFile = '') then DoWorkFile;
-
-    if WorkFile <> '' then
-      S := WorkFile
-    else if MainFile <> '' then
-      S := MainFile
-    else
-      Exit;
-
-    if AltEditor then
-      Execute(CodeCmd, '''' + S + '''')
-    else
-      Execute(NanoCmd, '--minibar -Aicl --rcfile ''' + HomeDir + '/misc/pascal.nanorc'' ''' + S + '''');
-  end;
-end;
-
-(**
- * Starts a compilation. Asks for a file name if necessary. In case of an error
- * during the Pascal to Assembly translation opens the editor with the Pascal
- * file and jumps to the error position.
- *)
-procedure DoCompile(Shift: Boolean);
-begin
-  if (WorkFile = '') and (MainFile = '') then DoWorkFile;
-
-  if MainFile <> '' then
-    SrcFile := MainFile
-  else if WorkFile <> '' then
-    SrcFile := WorkFile
-  else
-    Exit;
-
-  if Build = 2 then
-  begin
-    if not AltEditor then
-    begin
-      WriteLn;
-      Write('Press a key... ');
-      GetKey;
-    end;
-    DoEdit(True);
-  end
-end;
-
-(**
- * Runs a compiles program by invoking a suitable emulator for the current
- * target platform.
- *)
-procedure DoRun(Debug, Shift: Boolean; Log: String);
-const
-  NullDev = {$ifdef windows} 'NUL' {$else} '/dev/null' {$endif};
-  (* Silences hdfmonkey, which reports errors on stdout, for expected ones.
-     Execute has no shell on Windows. *)
-  Quiet = {$ifdef windows} '' {$else} ' >' + NullDev {$endif};
-var
-  Addr, Args, RunFile, S: String;
-begin
-  if Length(BinFile) <> 0 then
-  begin
-    if Binary = btCPM then
-    begin
-      if Shift then
-        Args := '-soy -t @'
-      else
-        Args := '';
-
-      if Log <> '' then
-      begin
-        S := ChangeExt(Log, '.tny');
-        StrToFile('printer file = "' + Log + '"', S);
-        Args := Args + ' -f ''' + S + '''';
-      end;
-
-      Args := Args + ' ''' + BinFile + '''';
-      if StartParams <> '' then
-        Args := Args + ' ' + StartParams;
-
-      if AltEditor then Write(#27'[40m');
-      Execute(TnylpoCmd, Args);
-      if AltEditor then Write(#27'[0m');
-
-      if (Log <> '') and not KeepInt then DeleteFile(S);
-    end
-    else if Binary = btAgon then
-    begin
-      GetDir(0, S);
-      ChDir(FabAgonDir);
-      {$i-}
-      MkDir('sdcard/pasta80.tmp');
-      IOResult;
-      {$i+}
-
-      CopyFile(BinFile, 'sdcard/pasta80.tmp/' + NameOnly(BinFile));
-      if CurrentOverlay <> 0 then
-        CopyFile(ChangeExt(BinFile, '.ovr'), 'sdcard/pasta80.tmp/' + NameOnly(ChangeExt(BinFile, '.ovr')));
-
-      (* Back up the user's autoexec.txt, unless an aborted run left one. *)
-      if (FSize('sdcard/pasta80.tmp/autoexec.bak') = -1) and (FSize('sdcard/autoexec.txt') <> -1) then
-        CopyFile('sdcard/autoexec.txt', 'sdcard/pasta80.tmp/autoexec.bak');
-
-      if LoaderFile <> '' then
-        Args := StrFromFile(LoaderFile)
-      else
-      begin
-        (* Running "x" or "x.bin" by name would prefer /mos/x.bin, and MOS 2
-           and 3 disagree on how to run from a subdirectory. *)
-        if Format = tfMosLet then Addr := '0xb0000' else Addr := '0x40000';
-        Args := 'load ' + NameOnly(BinFile) + ' ' + Addr + #13#10'run ' + Addr;
-        if StartParams <> '' then
-          Args := Args + ' ' + StartParams;
-        if Log <> '' then
-          Args := Args + #13#10'emulator_exit_success';
-      end;
-
-      StrToFile('cd /pasta80.tmp'#13#10 + Args, 'sdcard/autoexec.txt');
-
-      Args := '';
-
-      if Debug then Args := Args + ' -d';
-
-      if Log <> '' then Args := Args + ' --printer-file ''' + Log + '''';
-
-      Execute('./fab-agon-emulator', Args);
-
-      if FSize('sdcard/pasta80.tmp/autoexec.bak') <> -1 then
-      begin
-        CopyFile('sdcard/pasta80.tmp/autoexec.bak', 'sdcard/autoexec.txt');
-        DeleteFile('sdcard/pasta80.tmp/autoexec.bak');
-      end
-      else
-        DeleteFile('sdcard/autoexec.txt');
-
-      ChDir(S);
-    end
-    else if Binary in [btZX, btZX128] then
-    begin
-      Args := '';
-
-      if Binary = btZX then
-        Args := Args + '--machine=48'
-      else
-        Args := Args + '--machine=128';
-
-      if Debug then
-        Args := Args + ' --debugger-command=''' + StrFromFile(HomeDir + '/misc/fuse.brk') + #10 + StrFromFile(ChangeExt(BinFile, '.brk')) + ''''
-      else
-        Args := Args + ' --debugger-command=''' + StrFromFile(HomeDir + '/misc/fuse.brk') + '''';
-
-      if Format = tfTape then
-        Args := Args + ' --phantom-typist-mode=auto --tape=''' + BinFile + ''''
-      else if Format = tfSnapshot then
-        Args := Args + ' --snapshot=''' + BinFile + ''''
-      else
-      begin
-        WriteLn('Tape or snapshot needed for Fuse.');
-        Exit;
-      end;
-
-      if Log <> '' then Args := Args + ' --printer --textfile=''' + PosixToNative(Log) + '''';
-
-      Execute(FuseCmd, Args);
-    end
-    else
-    begin
-      if (Format = tfTape) or (Format = tfRunDir) then
-      begin
-        RunFile := '/pasta80.tmp/' + NameOnly(BinFile);
-
-        Execute(MonkeyCmd, 'mkdir ''' + ImagePath + ''' /pasta80.tmp' + Quiet);
-        Execute(MonkeyCmd, 'put ''' + ImagePath + ''' ''' + BinFile + ''' /pasta80.tmp');
-
-        (* Back up the user's autoexec.bas, unless an aborted run left one. *)
-        Execute(MonkeyCmd, 'get ''' + ImagePath + ''' /pasta80.tmp/autoexec.bak autoexec.bak' + Quiet);
-        if FSize('autoexec.bak') <= 0 then
-        begin
-          Execute(MonkeyCmd, 'get ''' + ImagePath + ''' /nextzxos/autoexec.bas autoexec.bak' + Quiet);
-          if FSize('autoexec.bak') > 0 then
-            Execute(MonkeyCmd, 'put ''' + ImagePath + ''' autoexec.bak /pasta80.tmp/autoexec.bak');
-        end;
-
-        if Format = tfRunDir then
-          StrToFile('#autostart'#13'10 cd "' + RunFile + '"'#13'20 load "run.bas"'#13, 'lastrun.txt')
-        else
-          StrToFile('#autostart'#13'10.tapein "' + RunFile + '"'#13'20 load "t:"'#13'30 load ""'#13, 'lastrun.txt');
-
-        Execute(MonkeyCmd, 'put ''' + ImagePath + ''' ''' + HomeDir + '/misc/autoexec.bas'' /nextzxos/autoexec.bas');
-        Execute(MonkeyCmd, 'put ''' + ImagePath + ''' lastrun.txt /pasta80.tmp/lastrun.txt');
-
-        Args := '-zxnext -r -nextrom -exit -mouse -printer';
-
-        if Log <> '' then Args := Args + '=''' + Log + '''';
-
-        if IsRetinaDisplay then
-          Args := Args + ' -w4'
-        else
-          Args := Args + ' -w2';
-
-        if Debug then Args := Args + ' -brk';
-
-        Args := Args + ' -mmc=''' + ImagePath + '''';
-
-        Execute(CSpectCmd, Args);
-
-        if FSize('autoexec.bak') > 0 then
-        begin
-          Execute(MonkeyCmd, 'put ''' + ImagePath + ''' autoexec.bak /nextzxos/autoexec.bas');
-          Execute(MonkeyCmd, 'rm ''' + ImagePath + ''' /pasta80.tmp/autoexec.bak');
-        end
-        else
-          Execute(MonkeyCmd, 'rm ''' + ImagePath + ''' /nextzxos/autoexec.bas' + Quiet);
-
-        DeleteFile('autoexec.bak');
-      end
-      else
-        WriteLn('Tape or runnable dir needed for CSpect.');
-    end;
-  end;
-end;
-
-(**
- * Runs a shell command without leaving interactive mode.
- *)
-procedure DoShell;
-var
-  Cmd: String;
-begin
-  Write('Command: ');
-  ReadLn(Cmd);
-
-  {$ifdef windows}
-  if Cmd = '' then
-    Exec('cmd.exe', '')
-  else
-    Exec('cmd.exe', '-c "' + Cmd + '"');
-  {$else}
-  if Cmd = '' then
-    Exec('/bin/bash', '')
-  else
-    Exec('/bin/bash', '-c "' + Cmd + '"');
   {$endif}
-end;
-
-(**
- * Lists files in the current directory that match a given pattern.
- *)
-procedure DoFiles;
-var
-  Pattern, S: String;
-  Dir: SearchRec;
-  I: Integer;
-begin
-  Write('Mask: ');
-  ReadLn(Pattern);
-  WriteLn;
-
-  {$ifdef windows}
-  if Pattern = '' then Pattern := '*.*';
-  {$else}
-  if Pattern = '' then Pattern := '*';
-  {$endif}
-
-  I := 0;
-  FindFirst(Pattern, Archive + Directory, Dir);
-  while DosError = 0 do
-  begin
-    I := I + 1;
-    if I = 4 then
-    begin
-      WriteLn;
-      I := 0;
-    end;
-
-    S := Dir.Name;
-    if Dir.Attr and Directory <> 0 then
-      S := '[' + S + ']';
-    Write(S + Space(19 - Length(S)) + ' ');
-    FindNext(Dir);
-  end;
-
-  FindClose(Dir);
-  WriteLn;
-end;
-
-(**
- * Translates a given string into a string with highlights for VT100. Basically,
- * any character following a ~ will be highlighted. Used for displaying menus.
- *)
-function TermStr(S: String): String;
-var
-  T: String;
-  I: Integer;
-begin
-  T := '';
-  I := 1;
-  while I <= Length(S) do
-  begin
-    C := S[I];
-    if C = '~' then
-    begin
-      T := T + #27'[1m' + S[I + 1] + #27'[m';
-      Inc(I);
-    end
-    else T := T + C;
-
-    Inc(I);
-  end;
-
-  TermStr := T;
 end;
 
 (**
  * Shows the copyright header.
  *)
-procedure Copyright(Ide: Boolean);
+procedure Copyright;
 begin
   WriteLn('----------------------------------------');
-  if Ide then
-    WriteLn(#27'[1m', 'PASTA/80 Pascal System', #27'[m', 'Version ' + Version:18)
-  else
-    WriteLn('PASTA/80 Pascal System', 'Version ' + Version:18);
-
-  if Binary = btZXN then
-    WriteLn(BinaryStr[Binary] + ', Z80N':40)
-  else if Binary = btAgon then
-    WriteLn(BinaryStr[Binary] + ', eZ80':40)
-  else
-    WriteLn(BinaryStr[Binary] + ', Z80':40);
+  WriteLn('PASTA/84 Pascal System', 'Version ' + Version:18);
+  WriteLn('IR4th backend':40);
   WriteLn;
   WriteLn('Copyright (C) 2020-26 by  Joerg Pleumann');
   WriteLn('----------------------------------------');
@@ -9133,492 +6716,36 @@ begin
 end;
 
 (**
- * Implements the options menu of interactive mode, which is where the user can
- * select the target platform and change compiler switches.
- *)
-procedure DoOptions;
-var
-  C: Char;
-begin
-  repeat
-    Write(#27'[2J'#27'[H');
-
-    Copyright(True);
-
-    WriteLn(TermStr('Target ~machine     : '), BinaryStr[Binary]);
-    WriteLn(TermStr('Output ~format      : '), FormatStr[Format]);
-    WriteLn;
-    WriteLn(TermStr('~Peephole optimizer : '), YesNoStr[Optimize]);
-    WriteLn(TermStr('~Dependency analysis: '), YesNoStr[SmartLink]);
-    WriteLn;
-    WriteLn(TermStr('~Release build      : '), YesNoStr[Release]);
-    WriteLn;
-    WriteLn(TermStr('~Back'));
-
-    C := GetKey;
-    case C of
-      'm': begin
-             if Binary = High(TBinaryType) then
-               Binary := Low(TBinaryType)
-             else
-               Binary := Succ(Binary);
-
-            if not SupportsFormat(Binary, Format) then Format := tfBinary;
-          end;
-
-      'f': repeat
-             if Format = High(TTargetFormat) then
-               Format := Low(TTargetFormat)
-             else
-               Format := Succ(Format);
-            until SupportsFormat(Binary, Format);
-      'p': Optimize := not Optimize;
-      'd': SmartLink := not SmartLink;
-      'r': Release := not Release;
-    end;
-  until C = 'b';
-end;
-
-(**
- * Implements the main screen/menu of interactive mode.
- *)
-procedure Interactive;
-var
-  C: Char;
-  I: Integer;
-begin
-  while True do
-  begin
-    Write(#27'[2J'#27'[H');
-
-    Copyright(True);
-
-    WriteLn(TermStr('~Active directory: '), FExpand('.'));
-    WriteLn;
-
-    Write(TermStr('~Work file: '), PosixToNative(FRelative(WorkFile)));
-    if WorkFile <> '' then
-    begin
-      I := FSize(WorkFile);
-      if I = -1 then WriteLn(' (new file)') else WriteLn(' (', I, ' bytes)');
-    end
-    else WriteLn;
-
-    Write(TermStr('~Main file: '), PosixToNative(FRelative(MainFile)));
-    if MainFile <> '' then
-    begin
-      I := FSize(MainFile);
-      if I = -1 then WriteLn(' (new file)') else WriteLn(' (', I, ' bytes)');
-    end
-    else WriteLn;
-
-    WriteLn;
-    WriteLn(TermStr('~Edit      ~Compile   ~Run       ~Debug'));
-    WriteLn(TermStr('~Shell     ~Files     ~Options   ~Quit'));
-
-    while True do
-    begin
-      C := GetKey;
-
-      case C of
-        'a': DoDirectory;
-        'm': DoMainFile;
-        'w': DoWorkFile;
-        'e': DoEdit(False);
-        'c', 'C': DoCompile(C = 'C');
-        'r', 'R': DoRun(False, C = 'R', '');
-        'd', 'D': DoRun(True, C = 'D', '');
-        's': DoShell;
-        'f': DoFiles;
-        'o', 'O': begin DoOptions; Break; end;
-        'q': begin WriteLn('Bye!'); WriteLn; Halt(0); end;
-        else Break;
-      end;
-    end;
-  end;
-end;
-
-(**
- * Runs the compiler's test suite for the chosen target. Requires emulator
- * and potentially other tools and images to be in place.
- *)
-procedure SelfTest;
-const
-  (**
-   * The name of our test suites (all under tests/*.pas).
-   *)
-  TestSuites: array[0..7] of String = (
-    'core', 'heap', 'files', 'more', 'params', 'sound', 'overlays', 'errors'
-  );
-
-  (**
-   * Which test suites do we need to run for which platform(s)?
-   *)
-  MandatoryFor: array[0..7] of set of TBinaryType = (
-    [btAgon, btCPM, btZX128, btZXN],
-    [btAgon, btCPM, btZX128, btZXN],
-    [btAgon, btCPM,          btZXN],
-    [btAgon, btCPM, btZX128, btZXN],
-    [btAgon, btCPM                ],
-    [btAgon,        btZX128, btZXN],
-    [btAgon, btCPM, btZX128, btZXN],
-    [btAgon, btCPM, btZX128, btZXN]
-  );
-
-  (**
-   * Whether a certain test needs overlays on a Spectrum. The overlays test
-   * suite also uses them on the Agon (see below). On CP/M there are none,
-   * so overlays.pas runs as an ordinary program there.
-   *)
-  NeedsOverlays: array[0..7] of Boolean = (
-    True, False, True, False, False, False, True, True
-  );
-
-  (**
-   * The output format to use for each target platform.
-   *)
-  FormatUsed: array[btCPM .. btAgon] of TTargetFormat = (
-    tfBinary, tfTape, tfTape, tfTape, tfBinary
-  );
-
-  (**
-   * Command line args. Only needed by params.pas. Multiple spaces intended.
-   *)
-  CmdLineArgs: array[0..7] of String = (
-    '', '', '', '', 'TIC TAC     TOE', '', '', ''
-  );
-
-  (**
-   * The loader to use for the errors.pas test suite per platform.
-   *)
-  LoaderUsed: array[btCPM .. btAgon] of String = (
-    '', '', 'errors128.bas', 'errorsnext.bas', 'agonerrs.txt'
-  );
-
-  (**
-   * The total number of expected tests per platform. Adjust for new tests.
-   *)
-  TotalTests: array[btCPM .. btAgon] of Integer = (
-    1937, 0, 1744, 1938, 1944
-  );
-
-  (**
-   * Exit codes of the self test, continuing those of a normal build (1 is a
-   * general error, 2 a compile error, 3 an assembly error). A failed build of
-   * a test suite passes on the build's exit code.
-   *)
-  ExitToolFailed = 4;
-  ExitTestsFailed = 5;
-
-var
-  I, J, PassCount, FailCount, PassTotal, FailTotal: Integer;
-  S, Log: String;
-  StartTime: Int64;
-  Duration: Real;
-
-  (**
-   * Aborts the self test with the given message and exit code.
-   *)
-  procedure Fail(const Message: String; Code: Integer);
-  begin
-    WriteLn('*** Error: ', Message);
-    WriteLn;
-    Halt(Code);
-  end;
-
-  (**
-   * Scans the log file of a normal test suite. Searches for passed and
-   * failed assertions.
-   *)
-  procedure ScanNormal(FileName: String; var PassCount, FailCount: Integer);
-  var
-    T: Text;
-    S: String;
-    E: Integer;
-  begin
-    Assign(T, FileName);
-    Reset(T);
-
-    while not Eof(T) do
-    begin
-      ReadLn(T, S);
-
-      if StartsWith(S, 'Passed assertions: ') then
-        Val(TrimStr(Copy(S, 20, 255)), PassCount, E)
-      else if StartsWith(S, 'Failed assertions: ') then
-        Val(TrimStr(Copy(S, 20, 255)), FailCount, E);
-    end;
-    Close(T);
-  end;
-
-  (**
-   * Scans the log file of the errors test suite. Searches for expectations
-   * and the line immediately following them.
-   *)
-  procedure ScanErrors(FileName: String; var PassCount, FailCount: Integer);
-  var
-    T: Text;
-    S, E: String;
-    B: Boolean;
-  begin
-    Assign(T, FileName);
-    Reset(T);
-
-    B := False;
-
-    while not Eof(T) do
-    begin
-      ReadLn(T, S);
-
-      if B then
-      begin
-        if S = E then
-          Inc(PassCount)
-        else
-          Inc(FailCount);
-
-        B := False;
-      end
-      else if StartsWith(S, 'Expected output:') then
-      begin
-        B := True;
-        E := TrimStr(Copy(S, 17, 255));
-      end;
-    end;
-    Close(T);
-
-    if B then Inc(FailCount);
-  end;
-
-begin
-  StartTime := GetMSCount;
-
-  UsePrinter := True;
-
-  for I := Low(TestSuites) to High(TestSuites) do
-  begin
-    if Binary in MandatoryFor[I] then
-    begin
-      SrcFile := FAbsolute('tests/' + TestSuites[I] + '.pas');
-      Log := FAbsolute('tests/' + TestSuites[I]) + '.log';
-      Overlays := NeedsOverlays[I] and ((Binary in [btZX128, btZXN])
-        or ((TestSuites[I] = 'overlays') and (Binary = btAgon)));
-      Format := FormatUsed[Binary];
-      if (TestSuites[I] = 'errors') and (LoaderUsed[Binary] <> '') then
-        LoaderFile := HomeDir + '/misc/' + LoaderUsed[Binary]
-      else
-        LoaderFile := '';
-
-      StartParams := CmdLineArgs[I];
-
-      J := Build;
-      if J <> 0 then
-        Fail('Build of ' + TestSuites[I] + ' failed for ' + BinaryStr[Binary], J);
-
-      DeleteFile(Log);
-      WriteLn;
-      WriteLn('Running...');
-
-      if (TestSuites[I] = 'errors') and (Binary = btCPM) then
-        for J := 1 to 34 do
-        begin
-          StartParams := IntToStr(J);
-          DoRun(False, False, Log);
-        end
-      else
-        DoRun(False, False, Log);
-
-      if ExecuteFailed then
-        Fail('Emulator for ' + TestSuites[I] + ' could not be started', ExitToolFailed);
-
-      if FSize(Log) <= 0 then
-        Fail('No output from ' + TestSuites[I] + ' on ' + BinaryStr[Binary], ExitToolFailed);
-
-      WriteLn;
-    end;
-  end;
-
-  WriteLn('======================================');
-  WriteLn('Results of PASTA/80 version ', Version, ' tests');
-  WriteLn('======================================');
-
-  WriteLn;
-  S := {$I %FPCTARGETOS%} + ' (' + {$I %FPCTARGETCPU%} + ') ---> ' + BinaryStr[Binary];
-  WriteLn('':(38 - Length(S)) div 2, S);
-
-  PassTotal := 0;
-  FailTotal := 0;
-
-  WriteLn;
-  WriteLn('Tests':8, 'Passed':10, 'Failed':10, 'Total':10);
-  WriteLn('--------  --------  --------  --------');
-  for I := Low(TestSuites) to High(TestSuites) do
-  begin
-    if Binary in MandatoryFor[I] then
-    begin
-      Log := FAbsolute('tests/' + TestSuites[I]) + '.log';
-      PassCount := 0;
-      FailCount := 0;
-      if TestSuites[I] = 'errors' then
-        ScanErrors(Log, PassCount, FailCount)
-      else
-        ScanNormal(Log, PassCount, FailCount);
-
-      if PassCount + FailCount = 0 then
-        WriteLn(TestSuites[I]:8, '???':10, '???':10, '???':10)
-      else
-        WriteLn(TestSuites[I]:8, PassCount:10, FailCount:10, PassCount + FailCount:10);
-
-      Inc(PassTotal, PassCount);
-      Inc(FailTotal, FailCount);
-    end
-    else
-      WriteLn(TestSuites[I]:8, 'n/a':10, 'n/a':10, 'n/a':10);
-  end;
-
-  WriteLn('--------  --------  --------  --------');
-  WriteLn('Total':8, PassTotal:10, FailTotal:10, PassTotal + FailTotal:10);
-  WriteLn;
-
-  if PassTotal + FailTotal <> TotalTests[Binary] then
-  begin
-    WriteLn('Wrong number of tests (', TotalTests[Binary], ' expected)!');
-    WriteLn;
-    FailTotal := 9999;
-  end;
-
-  Duration := (GetMSCount - StartTime) / 1000.0;
-
-  Write('':14);
-  if FailTotal = 0 then
-    WriteLn(#27'[1;30;42m   PASS   '#27'[0m')
-  else
-    WriteLn(#27'[1;37;41m   FAIL   '#27'[0m');
-  WriteLn;
-
-  WriteLn('Tests finished (', Duration:0:3, 's).');
-  WriteLn;
-
-  if FailTotal <> 0 then Halt(ExitTestsFailed);
-end;
-
-(**
- * Process command-line parameters and, ultimately, either start a build or
- * enter interactive mode.
+ * Processes command-line parameters and compiles the input file.
  *)
 procedure Parameters;
 var
-  Ide, Tests: Boolean;
-  I, Code: Integer;
+  I: Integer;
 begin
   if ParamCount = 0 then
   begin
-    Copyright(False);
+    Copyright;
 
     WriteLn('Usage:');
-    WriteLn('  pasta80 { <option> } <input>');
+    WriteLn('  pasta84 { <option> } <input>');
     WriteLn;
     WriteLn('Options:');
-    WriteLn('  --cpm          sets target to CP/M (default)');
-    WriteLn('  --[zx]48       sets target to ZX Spectrum 48K');
-    WriteLn('  --[zx]128      sets target to ZX Spectrum 128K');
-    WriteLn('  --[zx]next     sets target to ZX Spectrum Next');
-    WriteLn('  --agon         sets target to Agon Light/Console8');
-    WriteLn;
-    WriteLn('  --bin          generates raw binary file (default)');
-    WriteLn('  --3dos         generates binary with +3DOS header');
-    WriteLn('  --tap[e]       generates .tap file with loader');
-    WriteLn('  --sna[pshot]   generates .sna snapshot file');
-    WriteLn('  --dir          generates .run runnable directory');
-    WriteLn('  --mos[let]     generates Agon MOSlet');
-    WriteLn;
-    WriteLn('  --loader <fn>  uses <fn> as BASIC loader (ZX, .tap and .run)');
-    WriteLn('  --start <addr> sets start address (ZX, default $8000)');
-    WriteLn;
     WriteLn('  --release      ignores assertions and breakpoints');
-    WriteLn('  --keep[int]    keeps intermediate assembly files');
-    WriteLn('  --printer      redirects screen output to printer');
-    WriteLn;
-    WriteLn('  --[no-]opt     controls peephole optimizations (on by default)');
-    WriteLn('  --[no-]dep     controls dependency analysis (on by default)');
-    WriteLn('  --[no-]ovr     controls overlays (128K/Next/Agon, on by default)');
-    WriteLn;
-    WriteLn('  --ide          starts interactive mode');
-    WriteLn('  --config       shows (and checks) the configuration');
+    WriteLn('  --keep[int]    accepted for compatibility (no-op)');
+    WriteLn('  --ir4          accepted for compatibility (no-op)');
     WriteLn('  --version      shows just the version number');
-    WriteLn('  --selftest     runs the compiler''s test suite (for a target)');
     WriteLn;
     Halt(1);
   end;
-
-  Ide := False;
-  Tests := False;
 
   I := 1;
   SrcFile := ParamStr(I);
   while Copy(SrcFile, 1, 2) = '--' do
   begin
-    if SrcFile = '--cpm' then
-      Binary := btCPM
-    else if (SrcFile = '--zx48') or (SrcFile = '--48') then
-      Binary := btZX
-    else if (SrcFile = '--zx128') or (SrcFile = '--128') then
-      Binary := btZX128
-    else if (SrcFile = '--zxnext') or (SrcFile = '--next') then
-      Binary := btZXN
-    else if SrcFile = '--agon' then
-      Binary := btAgon
-    else if SrcFile = '--bin' then
-      Format := tfBinary
-    else if (SrcFile = '--mos') or (SrcFile = '--moslet') then
-      Format := tfMosLet
-    else if SrcFile = '--3dos' then
-      Format := tfPlus3Dos
-    else if SrcFile = '--dir' then
-      Format := tfRunDir
-    else if (SrcFile = '--tap') or (SrcFile = '--tape') then
-      Format := tfTape
-    else if (SrcFile = '--sna') or (SrcFile = '--snapshot') then
-      Format := tfSnapshot
-    else if (SrcFile = '--ovr') or (SrcFile = '--no-ovr') then
-      Overlays := SrcFile = '--ovr'
-    else if (SrcFile = '--opt') or (SrcFile = '--no-opt') then
-      Optimize := SrcFile = '--opt'
-    else if (SrcFile = '--dep') or (SrcFile = '--no-dep') then
-      SmartLink := SrcFile = '--dep'
-    else if SrcFile = '--release' then
+    if SrcFile = '--release' then
       Release := True
-    else if (SrcFile = '--keepint') or (SrcFile = '--keep') then
-      KeepInt := True
-    else if SrcFile = '--printer' then
-      UsePrinter := True
-    else if SrcFile = '--loader' then
-    begin
-      I := I + 1;
-
-      if (ParamStr(I) = '') or (Copy(ParamStr(I), 1, 2) = '--') then
-        Error('Missing file name after --loader');
-
-      LoaderFile := FAbsolute(NativeToPosix(ParamStr(I)));
-
-      if FSize(LoaderFile) = -1 then
-        Error('Loader "' + PosixToNative(FRelative(LoaderFile)) + '" not found');
-    end
-    else if SrcFile = '--start' then
-    begin
-      I := I + 1;
-
-      Val(ParamStr(I), CustomOrigin, Code);
-      if (ParamStr(I) = '') or (Code <> 0) then
-        Error('Missing or invalid address after --start');
-
-      if (CustomOrigin < $6000) or (CustomOrigin > $FFFF) then
-        Error('Address after --start must be between $6000 and $FFFF');
-    end
-    else if SrcFile = '--ide' then
-      Ide := True
-    else if SrcFile = '--selftest' then
-      Tests := True
+    else if (SrcFile = '--keepint') or (SrcFile = '--keep') or (SrcFile = '--ir4') then
+      begin end
     else
       Error('Invalid option: ' + SrcFile);
 
@@ -9627,51 +6754,16 @@ begin
   end;
 
   if SrcFile = '' then
-  begin
-    if not Ide and not Tests then Error('No input file');
-  end
-  else
-  begin
-    SrcFile := FAbsolute(NativeToPosix(SrcFile));
-    if Pos('.', SrcFile) = 0 then SrcFile := SrcFile + '.pas';
-    AsmFile := ChangeExt(SrcFile, '.z80');
-  end;
+    Error('No input file');
 
-  if not SupportsFormat(Binary, Format) then
-    Error(FormatStr[Format] + ' format not supported by ' + BinaryStr[Binary] + '.');
+  SrcFile := FAbsolute(NativeToPosix(SrcFile));
+  if Pos('.', SrcFile) = 0 then SrcFile := SrcFile + '.pas';
+  AsmFile := ChangeExt(SrcFile, '.ir4');
 
-  if LoaderFile <> '' then
-  begin
-    if not (Binary in [btZX, btZX128, btZXN]) then
-      Error('Loader not supported by ' + BinaryStr[Binary] + '.');
-
-    if not (Format in [tfTape, tfRunDir]) then
-      Error('Loader not used for ' + FormatStr[Format] + '.');
-
-    if not IsBasicLoader(LoaderFile) then
-      Error('Loader must be a BASIC program with +3DOS header.');
-  end;
-
-  if (CustomOrigin <> 0) and not (Binary in [btZX, btZX128, btZXN]) then
-    Error('Start address not supported by ' + BinaryStr[Binary] + '.');
-
-  if Tests and (Binary = btZX) then
-    Error('Tests too large for 48K Spectrum. Please use 128K instead.');
-
-  if Ide then
-  begin
-    if SrcFile <> '' then WorkFile := SrcFile;
-    Interactive;
-  end
-  else if Tests then
-    SelfTest
-  else
-  begin
-    Copyright(False);
-    I := Build;
-    WriteLn;
-    Halt(I);
-  end;
+  Copyright;
+  I := Build;
+  WriteLn;
+  Halt(I);
 end;
 
 (* -------------------------------------------------------------------------- *)
@@ -9679,6 +6771,22 @@ end;
 (* -------------------------------------------------------------------------- *)
 
 begin
+  Release := False;
+  IR4LineOpen := False;
+  IR4Buffering := False;
+  IR4Head := nil;
+  IR4Tail := nil;
+  IR4FnSig := '';
+  IR4CaseTemp := '';
+  SymbolTable := nil;
+  CurrentScope := nil;
+  LastBuiltIn := nil;
+  Defines := nil;
+  IfDefLevel := -1;
+  ScannerMuted := False;
+  IOMode := True;
+  Muted := 0;
+
   if ParamStr(1) = '--version' then
   begin
     WriteLn(Version);
@@ -9686,13 +6794,6 @@ begin
   end;
 
   LoadConfig;
-
-  if ParamStr(1) = '--config' then
-  begin
-    Copyright(False);
-    Doctor;
-    Halt;
-  end;
 
   Parameters;
 end.

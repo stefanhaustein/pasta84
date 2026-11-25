@@ -1,0 +1,440 @@
+\ files_p.ir4 - PASTA/84 File, Text, and console line-input runtime
+
+require "file.ir4"
+require "str_p.ir4"
+require "crt_p.ir4"
+
+var __lasterror :bytes 1
+var __cur_file :a
+var __text_buf :bytes 256
+var __linebuf :bytes 256
+var __linelen :i
+var __linepos :i
+
+fn pas_getline ( )
+  0 -> __linelen
+  0 -> __linepos
+  var c :i
+  begin
+    -1
+  while
+    xkey -> c
+    c 0 = if cr return then
+    c 10 = c 13 = or if cr return then
+    c 8 = c 127 = or if
+      __linelen 0 > if
+        __linelen 1 - -> __linelen
+        8 xemit 32 xemit 8 xemit
+      then
+    else
+      c 32 >= __linelen 255 < and if
+        c __linebuf __linelen a+ i8!
+        __linelen 1 + -> __linelen
+        c xemit
+      then
+    then
+  repeat
+end
+
+fn pas_get_c ( -> :i )
+  var c :i
+  __linepos __linelen < if
+    __linebuf __linepos a+ u8@ -> c
+    __linepos 1 + -> __linepos
+    c return
+  then
+  13
+end
+
+fn pas_get_s ( dst :a maxlen :i )
+  __linelen __linepos - -> var avail :i
+  avail 0 < if 0 -> avail then
+  avail maxlen > if maxlen -> avail then
+  avail dst i8!
+  avail 0 > if
+    dst 1 a+ __linebuf __linepos a+ avail memcpy
+  then
+  __linelen -> __linepos
+end
+
+fn pas_line_token ( -> :i )
+  begin
+    __linepos __linelen < if __linebuf __linepos a+ u8@ 32 <= else 0 then
+  while
+    __linepos 1 + -> __linepos
+  repeat
+  0 -> var n :i
+  begin
+    __linepos __linelen < if __linebuf __linepos a+ u8@ 32 > else 0 then
+  while
+    n 31 < if
+      __linebuf __linepos a+ u8@ __io_tmp 1 n + a+ i8!
+      1 +-> n
+    then
+    __linepos 1 + -> __linepos
+  repeat
+  n __io_tmp i8!
+  n
+end
+
+fn pas_get_i ( -> :i )
+  var v :bytes 8
+  var e :bytes 8
+  pas_line_token 0 = if 1 __lasterror i8! 0 return then
+  __io_tmp v e pas_val_int
+  e @ 0 <> if 1 __lasterror i8! 0 return then
+  v @
+end
+
+fn pas_get_f ( -> :f )
+  var v :bytes 8
+  var e :bytes 8
+  pas_line_token 0 = if 1 __lasterror i8! 0.0 return then
+  __io_tmp v e pas_val_float
+  e @ 0 <> if 1 __lasterror i8! 0.0 return then
+  v f@
+end
+
+fn pas_get_e ( tab :a -> :i )
+  var v :bytes 8
+  var e :bytes 8
+  pas_line_token 0 = if 1 __lasterror i8! 0 return then
+  __io_tmp v e tab pas_val_enum
+  e @ 0 <> if 1 __lasterror i8! 0 return then
+  v u8@
+end
+
+fn pas_file_copy_name ( f :a name :a )
+  name u8@ -> var len :i
+  len 220 > if 220 -> len then
+  len 0 > if f 32 a+ name 1 a+ len memcpy then
+  0 f 32 len + a+ i8!
+end
+
+fn pas_block_assign ( f :a name :a )
+  -1 f !
+  0 f 8 a+ !
+  0 f 16 a+ i8!
+  0 f 17 a+ i8!
+  0 f 18 a+ i8!
+  128 f 24 a+ !
+  f name pas_file_copy_name
+end
+
+fn pas_text_assign ( f :a name :a )
+  f name pas_block_assign
+  1 f 24 a+ !
+end
+
+fn pas_file_assign ( f :a name :a rsz :i )
+  f name pas_block_assign
+  rsz f 24 a+ !
+end
+
+fn pas_block_open ( f :a omode :i fmode :i -> :i )
+  f 8 a+ @ 0 <> f @ 0 >= and if f @ fsclose drop then
+  f 32 a+ omode fsopen0 -> var fd :i
+  fd 0 < if
+    1 __lasterror i8!
+    -1 f !
+    0 f 8 a+ !
+    1 f 16 a+ i8!
+    0 f 17 a+ i8!
+    0 return
+  then
+  fd f !
+  fmode f 8 a+ !
+  omode fsmode_write = omode fsmode_append = or if
+    1 f 16 a+ i8!
+  else
+    fd fssize 0 <= if 1 else 0 then f 16 a+ i8!
+  then
+  0 f 17 a+ i8!
+  0 __lasterror i8!
+  1
+end
+
+fn pas_file_reset ( f :a )
+  f fsmode_readwrite 3 pas_block_open 0 = if
+    f fsmode_read 1 pas_block_open drop
+  then
+end
+
+fn pas_file_rewrite ( f :a )
+  f fsmode_write 3 pas_block_open drop
+end
+
+fn pas_block_reset ( f :a rsz :i )
+  rsz f 24 a+ !
+  f pas_file_reset
+end
+
+fn pas_block_rewrite ( f :a rsz :i )
+  rsz f 24 a+ !
+  f pas_file_rewrite
+end
+
+fn pas_text_reset ( f :a )
+  f fsmode_read 1 pas_block_open drop
+end
+
+fn pas_text_rewrite ( f :a )
+  f fsmode_write 2 pas_block_open drop
+end
+
+fn pas_text_append ( f :a )
+  f fsmode_append 2 pas_block_open drop
+end
+
+fn pas_block_close ( f :a )
+  f 8 a+ @ 0 = if return then
+  f @ 0 >= if
+    f @ fsclose 0 < if 1 __lasterror i8! then
+  then
+  -1 f !
+  0 f 8 a+ !
+  1 f 16 a+ i8!
+  0 f 17 a+ i8!
+end
+
+fn pas_block_eof ( f :a -> :i )
+  f 8 a+ @ 0 = f @ 0 < or if 1 return then
+  f @ fspos -> var pos :i
+  f @ fssize -> var sz :i
+  pos 0 < sz 0 < or if 1 return then
+  pos sz >=
+end
+
+fn pas_block_read ( f :a buf :a cnt :i actual :a )
+  f 8 a+ @ -> var m :i
+  m 1 <> m 3 <> and if
+    1 __lasterror i8!
+    actual 0 i>a a<> if 0 actual ! then
+    return
+  then
+  cnt f 24 a+ @ * -> var req :i
+  req 0 <= if
+    actual 0 i>a a<> if 0 actual ! then
+    0 __lasterror i8!
+    return
+  then
+  f @ buf req fsread -> var got :i
+  got 0 < if
+    1 __lasterror i8!
+    actual 0 i>a a<> if 0 actual ! then
+    return
+  then
+  got req < if 1 f 16 a+ i8! then
+  actual 0 i>a a<> if
+    f 24 a+ @ -> var rsz :i
+    got rsz + 1 - rsz u/ actual !
+  then
+  0 __lasterror i8!
+end
+
+fn pas_block_write ( f :a buf :a cnt :i actual :a )
+  f 8 a+ @ -> var m :i
+  m 2 <> m 3 <> and if
+    1 __lasterror i8!
+    actual 0 i>a a<> if 0 actual ! then
+    return
+  then
+  cnt f 24 a+ @ * -> var req :i
+  req 0 <= if
+    actual 0 i>a a<> if 0 actual ! then
+    0 __lasterror i8!
+    return
+  then
+  f @ buf req fswrite -> var put :i
+  put 0 < if
+    1 __lasterror i8!
+    actual 0 i>a a<> if 0 actual ! then
+    return
+  then
+  put req < if 1 __lasterror i8! then
+  actual 0 i>a a<> if put f 24 a+ @ u/ actual ! then
+  0 __lasterror i8!
+end
+
+fn pas_block_flush ( f :a )
+  f 8 a+ @ 0 = f @ 0 < or if 1 __lasterror i8! return then
+  f @ fsflush 0 < if 1 __lasterror i8! else 0 __lasterror i8! then
+end
+
+fn pas_block_seek ( f :a pos :i )
+  f 8 a+ @ 0 = f @ 0 < or pos 0 < or if 1 __lasterror i8! return then
+  f @ pos f 24 a+ @ * fsseek 0 < if 1 __lasterror i8! return then
+  0 f 16 a+ i8!
+  0 f 17 a+ i8!
+  0 __lasterror i8!
+end
+
+fn pas_block_pos ( f :a -> :i )
+  f 8 a+ @ 0 = f @ 0 < or if 1 __lasterror i8! 0 return then
+  f @ fspos -> var pos :i
+  pos 0 < if 1 __lasterror i8! 0 return then
+  0 __lasterror i8!
+  pos f 24 a+ @ u/
+end
+
+fn pas_block_size ( f :a -> :i )
+  f 8 a+ @ 0 = f @ 0 < or if 1 __lasterror i8! 0 return then
+  f @ fssize -> var sz :i
+  sz 0 < if 1 __lasterror i8! 0 return then
+  0 __lasterror i8!
+  sz 0 = if 0 return then
+  f 24 a+ @ -> var rsz :i
+  sz rsz + 1 - rsz u/
+end
+
+fn pas_block_erase ( f :a )
+  f 8 a+ @ 0 <> if 1 __lasterror i8! return then
+  f 32 a+ fsdelete0 0 < if 1 __lasterror i8! else 0 __lasterror i8! then
+end
+
+fn pas_block_rename ( f :a name :a )
+  f 8 a+ @ 0 <> if 1 __lasterror i8! return then
+  f 32 a+ -> var oldp :a
+  oldp strlen0 -> var oldlen :i
+  name u8@ -> var newlen :i
+  newlen 220 > if 220 -> newlen then
+  oldp oldlen name 1 a+ newlen fsrename 0 < if 1 __lasterror i8! return then
+  f name pas_file_copy_name
+  0 __lasterror i8!
+end
+
+fn pas_file_read ( f :a dst :a )
+  f dst 1 0 i>a pas_block_read
+end
+
+fn pas_file_write ( f :a src :a )
+  f src 1 0 i>a pas_block_write
+end
+
+fn pas_text_peek ( f :a -> :i )
+  f 16 a+ u8@ 0 <> if -1 return then
+  f 17 a+ u8@ 0 <> if f 18 a+ u8@ return then
+  f 8 a+ @ 1 <> if 1 __lasterror i8! 1 f 16 a+ i8! -1 return then
+  f @ fsgetc -> var c :i
+  c 0 < c 26 = or if
+    1 f 16 a+ i8!
+    -1 return
+  then
+  1 f 17 a+ i8!
+  c f 18 a+ i8!
+  c
+end
+
+fn pas_text_next ( f :a -> :i )
+  f pas_text_peek -> var c :i
+  0 f 17 a+ i8!
+  c
+end
+
+fn pas_text_eof ( f :a -> :i )
+  f pas_text_peek 0 <
+end
+
+fn pas_text_eoln ( f :a -> :i )
+  f pas_text_peek -> var c :i
+  c 0 < c 10 = c 13 = or or
+end
+
+fn pas_text_readc ( f :a dst :a )
+  f pas_text_next -> var c :i
+  c 0 < if 26 -> c then
+  c dst i8!
+end
+
+fn pas_text_reads ( f :a dst :a cap :i )
+  0 -> var len :i
+  var c :i
+  begin
+    -1
+  while
+    f pas_text_next -> c
+    c 0 < if len dst i8! return then
+    c 10 = if len dst i8! return then
+    c 13 = if
+      f pas_text_peek 10 = if f pas_text_next drop then
+      len dst i8!
+      return
+    then
+    len cap < if
+      1 +-> len
+      c dst len a+ i8!
+    then
+  repeat
+end
+
+fn pas_text_skipeoln ( f :a )
+  var c :i
+  begin
+    -1
+  while
+    f pas_text_next -> c
+    c 0 < c 10 = or if return then
+    c 13 = if
+      f pas_text_peek 10 = if f pas_text_next drop then
+      return
+    then
+  repeat
+end
+
+fn pas_text_token ( f :a -> :i )
+  var c :i
+  begin
+    f pas_text_peek -> c
+    c 0 >= if c 32 <= else 0 then
+  while
+    f pas_text_next drop
+  repeat
+  0 -> var n :i
+  begin
+    f pas_text_peek -> c
+    c 32 >
+  while
+    n 31 < if
+      c __io_tmp 1 n + a+ i8!
+      1 +-> n
+    then
+    f pas_text_next drop
+  repeat
+  n __io_tmp i8!
+  n
+end
+
+fn pas_text_readi ( f :a dst :a )
+  var e :bytes 8
+  f pas_text_token 0 = if 1 __lasterror i8! return then
+  __io_tmp dst e pas_val_int
+  e @ 0 <> if 1 __lasterror i8! then
+end
+
+fn pas_text_readf ( f :a dst :a )
+  var e :bytes 8
+  f pas_text_token 0 = if 1 __lasterror i8! return then
+  __io_tmp dst e pas_val_float
+  e @ 0 <> if 1 __lasterror i8! then
+end
+
+fn pas_text_reade ( f :a dst :a tab :a )
+  var e :bytes 8
+  f pas_text_token 0 = if 1 __lasterror i8! return then
+  __io_tmp dst e tab pas_val_enum
+  e @ 0 <> if 1 __lasterror i8! then
+end
+
+fn pas_text_writes ( f :a s :a )
+  f 8 a+ @ 2 <> if 1 __lasterror i8! return then
+  s u8@ -> var len :i
+  len 0 = if 0 __lasterror i8! return then
+  f @ s 1 a+ len fswrite len <> if 1 __lasterror i8! return then
+  0 __lasterror i8!
+end
+
+fn pas_text_writeeoln ( f :a )
+  f 8 a+ @ 2 <> if 1 __lasterror i8! return then
+  f @ 10 fsputc 0 < if 1 __lasterror i8! return then
+  0 __lasterror i8!
+end

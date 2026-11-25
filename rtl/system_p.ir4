@@ -1,0 +1,213 @@
+\ system_p.ir4 - PASTA/84 core runtime (System unit)
+
+require "stdio.ir4"
+require "terminal.ir4"
+require "memory.ir4"
+require "heap.ir4"
+require "math.ir4"
+require "system.ir4"
+require "crt_p.ir4"
+require "str_p.ir4"
+require "files_p.ir4"
+require "graph_p.ir4"
+
+var __assertpassed :i
+var __assertfailed :i
+var __exitcode :i
+var __randseed1 :i
+var __randseed2 :i
+var __display :bytes 64
+
+data __assert_msg1 "Assertion failed in " 0 :i8 end
+data __assert_msg2 " line " 0 :i8 end
+
+fn pas_abs ( n :i -> :i )
+  n 0 < if 0 n - return then
+  n
+end
+
+fn pas_inc_i ( p :a d :i )
+  p @ d + p !
+end
+
+fn pas_inc_b ( p :a d :i )
+  p u8@ d + p i8!
+end
+
+fn pas_inc_a ( p :a d :i )
+  p a@ d a+ p a!
+end
+
+fn pas_set_empty ( dst :a -> :a )
+  dst 32 0 memfill
+  dst
+end
+
+fn pas_set_incl ( s :a e :i -> :a )
+  e 0 < e 255 > or if s return then
+  s e 3 >> a+ -> var p :a
+  p u8@ 1 e 7 and << or p i8!
+  s
+end
+
+fn pas_set_excl ( s :a e :i -> :a )
+  e 0 < e 255 > or if s return then
+  s e 3 >> a+ -> var p :a
+  p u8@ 1 e 7 and << invert and p i8!
+  s
+end
+
+fn pas_set_range ( s :a lo :i hi :i -> :a )
+  begin
+    lo hi <=
+  while
+    s lo pas_set_incl drop
+    1 +-> lo
+  repeat
+  s
+end
+
+fn pas_set_in ( e :i s :a -> :i )
+  e 0 < e 255 > or if 0 return then
+  s e 3 >> a+ u8@ 1 e 7 and << and 0 <>
+end
+
+fn pas_set_add ( a :a b :a dst :a -> :a )
+  0 -> var i :i
+  begin
+    i 32 <
+  while
+    a i a+ u8@ b i a+ u8@ or dst i a+ i8!
+    1 +-> i
+  repeat
+  dst
+end
+
+fn pas_set_sub ( a :a b :a dst :a -> :a )
+  0 -> var i :i
+  begin
+    i 32 <
+  while
+    a i a+ u8@ b i a+ u8@ invert and dst i a+ i8!
+    1 +-> i
+  repeat
+  dst
+end
+
+fn pas_set_mul ( a :a b :a dst :a -> :a )
+  0 -> var i :i
+  begin
+    i 32 <
+  while
+    a i a+ u8@ b i a+ u8@ and dst i a+ i8!
+    1 +-> i
+  repeat
+  dst
+end
+
+fn pas_set_eq ( a :a b :a -> :i )
+  a b 32 memcmp 0 =
+end
+
+fn pas_set_leq ( a :a b :a -> :i )
+  0 -> var i :i
+  begin
+    i 32 <
+  while
+    a i a+ u8@ b i a+ u8@ invert and 0 <> if 0 return then
+    1 +-> i
+  repeat
+  -1
+end
+
+fn pas_set_geq ( a :a b :a -> :i )
+  b a pas_set_leq
+end
+
+fn pas_halt ( code :i )
+  code -> __exitcode
+end
+
+fn pas_assert ( cond :i file :a line :i )
+  cond 0 <> if
+    __assertpassed 1 + -> __assertpassed
+    return
+  then
+  __assertfailed 1 + -> __assertfailed
+  __assert_msg1 type0
+  file pas_prints
+  __assert_msg2 type0
+  line typei
+  cr
+end
+
+fn pas_getmem ( pvar :a sz :i )
+  sz heapalloc pvar a!
+end
+
+fn pas_freemem ( p :a sz :i )
+  sz drop
+  p heapfree
+end
+
+fn pas_move ( src :a dst :a cnt :i )
+  dst src cnt memcpy
+end
+
+fn pas_memavail ( -> :i )
+  32767
+end
+
+fn pas_maxavail ( -> :i )
+  32767
+end
+
+fn pas_sqr_f ( x :f -> :f )
+  x x f*
+end
+
+fn pas_log10 ( x :f -> :f )
+  x ln 2.302585092994046 f/
+end
+
+fn pas_pi ( -> :f )
+  3.141592653589793
+end
+
+fn pas_maxreal ( -> :f )
+  1.701411835e+38
+end
+
+fn pas_minreal ( -> :f )
+  -1.701411835e+38
+end
+
+fn pas_round ( x :f -> :i )
+  x fround
+end
+
+fn pas_trunc ( x :f -> :i )
+  x f>i
+end
+
+fn pas_random ( range :i -> :i )
+  __randseed1 25173 * 13849 + -> __randseed1
+  range 0 <= if 0 return then
+  __randseed1 32767 and range mod
+end
+
+fn pas_random_f ( -> :f )
+  32767 pas_random i>f 32768.0 f/
+end
+
+fn pas_paramcount ( -> :i )
+  sysargc 1 > if sysargc 1 - else 0 then
+end
+
+fn pas_paramstr ( idx :i dst :a -> :a )
+  idx 0 < idx sysargc >= or if 0 dst i8! dst return then
+  idx dst 1 a+ 255 sysargv -> var len :i
+  len 0 < if 0 -> len then
+  len dst i8!
+  dst
+end

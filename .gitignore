@@ -3,6 +3,9 @@
 /pasta80
 /pasta80.exe
 /pasta80.o
+/pasta84
+/pasta84.exe
+/pasta84.o
 TODO.md
 VERSION.md
 RELEASE.md
@@ -16,9 +19,12 @@ local
 /tests/*.bin
 /tests/*.brk
 /tests/*.com
+/tests/*.ir4
 /tests/*.log
 /tests/*.lst
 /tests/*.ovr
+/tests/*.p
+/tests/*.prg
 /tests/*.tny
 /tests/*.sna
 /tests/*.sym
@@ -28,9 +34,12 @@ local
 /examples/*.bin
 /examples/*.brk
 /examples/*.com
+/examples/*.ir4
 /examples/*.log
 /examples/*.lst
 /examples/*.ovr
+/examples/*.p
+/examples/*.prg
 /examples/*.sna
 /examples/*.sym
 /examples/*.tap

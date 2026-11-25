@@ -1,0 +1,83 @@
+\ dos_p.ir4 - PASTA/84 Dos unit runtime (GetEnv, FExpand)
+
+require "system.ir4"
+require "memory.ir4"
+
+var __dos_raw :bytes 260
+var __dos_cwd :bytes 256
+
+fn pas_getenv ( name :a dst :a -> :a )
+  name 1 a+ name u8@ dst 1 a+ 255 sysenv -> var len :i
+  len 0 < if 0 -> len then
+  len dst i8!
+  dst
+end
+
+fn pas_fexpand ( path :a dst :a -> :a )
+  path u8@ -> var plen :i
+  0 -> var rlen :i
+  plen 0 > if path 1 a+ u8@ 47 = else 0 then if
+    plen 255 > if 255 -> plen then
+    plen 0 > if __dos_raw path 1 a+ plen memcpy then
+    plen -> rlen
+  else
+    __dos_cwd 255 syscwd -> var clen :i
+    clen 0 < if
+      47 __dos_raw i8!
+      1 -> rlen
+    else
+      clen 0 > if __dos_raw __dos_cwd clen memcpy then
+      clen -> rlen
+      rlen 0 = if
+        47 __dos_raw i8!
+        1 -> rlen
+      else
+        __dos_raw rlen 1 - a+ u8@ 47 <> rlen 255 < and if
+          47 __dos_raw rlen a+ i8!
+          1 +-> rlen
+        then
+      then
+    then
+    plen 0 > if
+      rlen plen + 255 > if 255 rlen - -> plen then
+      plen 0 > if
+        __dos_raw rlen a+ path 1 a+ plen memcpy
+        rlen plen + -> rlen
+      then
+    then
+  then
+
+  0 -> var olen :i
+  0 -> var i :i
+  begin i rlen < while
+    begin i rlen < if __dos_raw i a+ u8@ 47 = else 0 then while 1 +-> i repeat
+    i -> var seg :i
+    begin i rlen < if __dos_raw i a+ u8@ 47 <> else 0 then while 1 +-> i repeat
+    i seg - -> var slen :i
+    slen 0 > if
+      slen 1 = if __dos_raw seg a+ u8@ 46 = else 0 then if
+        \ '.' -> skip
+      else
+        slen 2 = if __dos_raw seg a+ u8@ 46 = __dos_raw seg 1 + a+ u8@ 46 = and else 0 then if
+          begin olen 0 > if dst olen a+ u8@ 47 <> else 0 then while
+            -1 +-> olen
+          repeat
+          olen 0 > if -1 +-> olen then
+        else
+          olen 1 + slen + 255 <= if
+            1 +-> olen
+            47 dst olen a+ i8!
+            dst olen 1 + a+ __dos_raw seg a+ slen memcpy
+            olen slen + -> olen
+          then
+        then
+      then
+    then
+  repeat
+  olen 0 = if
+    1 -> olen
+    47 dst 1 a+ i8!
+  then
+  olen dst i8!
+  dst
+end

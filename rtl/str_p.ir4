@@ -1,0 +1,516 @@
+\ str_p.ir4 - PASTA/84 ShortString, Str/Val, enum, and formatted console I/O
+
+require "stdio.ir4"
+require "memory.ir4"
+require "math.ir4"
+require "crt_p.ir4"
+
+var __io_tmp :bytes 256
+
+data __bool_false 5 :i8 "False" 0 :i8 end
+data __bool_true  4 :i8 "True"  0 :i8 end
+data __boolean_enum
+  2
+  & __bool_false
+  & __bool_true
+end
+
+fn pas_strlen ( s :a -> :i )
+  s u8@
+end
+
+fn pas_outc ( c :i )
+  __pas_gfx_active 0 = if c xemit else c __pas_gfx_outc_fn ( :i ) then
+end
+
+fn pas_prints ( s :a )
+  __pas_gfx_active 0 = if s 1 a+ s u8@ type else s __pas_gfx_prints_fn ( :a ) then
+end
+
+fn pas_prints_w ( s :a w :i )
+  s u8@ -> var len :i
+  begin
+    w len >
+  while
+    32 pas_outc
+    -1 +-> w
+  repeat
+  s pas_prints
+end
+
+fn pas_printc_w ( c :i w :i )
+  begin
+    w 1 >
+  while
+    32 pas_outc
+    -1 +-> w
+  repeat
+  c pas_outc
+end
+
+fn pas_char2str ( c :i dst :a -> :a )
+  1 dst i8!
+  c dst 1 a+ i8!
+  dst
+end
+
+fn pas_strcopy_clamp ( dst :a src :a cap :i -> :a )
+  src u8@ -> var len :i
+  len cap > if cap -> len then
+  len 0 < if 0 -> len then
+  len dst i8!
+  dst 1 a+ src 1 a+ len memcpy
+  dst
+end
+
+fn pas_strcopy ( dst :a src :a )
+  dst src 255 pas_strcopy_clamp drop
+end
+
+fn pas_streq ( a :a b :a -> :i )
+  a u8@ -> var la :i
+  b u8@ -> var lb :i
+  la lb <> if 0 return then
+  a 1 a+ b 1 a+ la memcmp 0 =
+end
+
+fn pas_strcmp ( a :a b :a -> :i )
+  a u8@ -> var la :i
+  b u8@ -> var lb :i
+  la lb < if la else lb then -> var minl :i
+  a 1 a+ b 1 a+ minl memcmp -> var d :i
+  d 0 <> if d return then
+  la lb -
+end
+
+fn pas_strconcat ( dst :a a :a b :a )
+  a u8@ -> var la :i
+  b u8@ -> var lb :i
+  la lb + 255 > if 255 la - -> lb then
+  la lb + dst i8!
+  dst 1 a+ a 1 a+ la memcpy
+  dst 1 a+ la a+ b 1 a+ lb memcpy
+end
+
+fn pas_stradd ( a :a b :a dst :a -> :a )
+  dst a b pas_strconcat
+  dst
+end
+
+fn pas_copy ( s :a start :i cnt :i dst :a -> :a )
+  s u8@ -> var len :i
+  start 1 < if 1 -> start then
+  cnt 0 <= start len > or if
+    0 dst i8!
+    dst return
+  then
+  len start - 1 + -> var avail :i
+  cnt avail > if avail -> cnt then
+  cnt dst i8!
+  dst 1 a+ s start a+ cnt memcpy
+  dst
+end
+
+fn pas_pos ( sub :a s :a -> :i )
+  sub u8@ -> var lsub :i
+  s u8@ -> var ls :i
+  lsub 0 = lsub ls > or if 0 return then
+  ls lsub - 1 + -> var lim :i
+  1 -> var i :i
+  begin
+    i lim <=
+  while
+    sub 1 a+ s i a+ lsub memcmp 0 = if i return then
+    1 +-> i
+  repeat
+  0
+end
+
+fn pas_str_insert ( src :a dst :a idx :i cap :i )
+  var tmp :bytes 256
+  src u8@ -> var lsrc :i
+  dst u8@ -> var ldst :i
+  idx 1 < if 1 -> idx then
+  idx ldst 1 + > if ldst 1 + -> idx then
+  lsrc ldst + cap > if cap ldst - -> lsrc then
+  lsrc 0 <= if return then
+  idx 1 - -> var pre :i
+  ldst pre - -> var post :i
+  ldst lsrc + tmp i8!
+  pre 0 > if tmp 1 a+ dst 1 a+ pre memcpy then
+  tmp 1 pre + a+ src 1 a+ lsrc memcpy
+  post 0 > if tmp 1 pre + lsrc + a+ dst idx a+ post memcpy then
+  dst tmp cap pas_strcopy_clamp drop
+end
+
+fn pas_str_delete ( s :a idx :i cnt :i )
+  s u8@ -> var len :i
+  idx 1 < cnt 0 <= idx len > or or if return then
+  len idx - 1 + -> var rem :i
+  cnt rem > if rem -> cnt then
+  rem cnt - -> var tail :i
+  tail 0 > if s idx a+ s idx cnt + a+ tail memcpy then
+  len cnt - s i8!
+end
+
+fn pas_str_raw_w ( raw :a rlen :i w :i dst :a cap :i )
+  w rlen - -> var pad :i
+  pad 0 < if 0 -> pad then
+  pad rlen + -> var total :i
+  total cap > if
+    cap rlen > if cap rlen - -> pad else 0 -> pad rlen cap > if cap -> rlen then then
+    pad rlen + -> total
+  then
+  total dst i8!
+  pad 0 > if dst 1 a+ pad 32 memfill then
+  rlen 0 > if dst 1 pad + a+ raw rlen memcpy then
+end
+
+fn pas_str_int_w ( n :i w :i dst :a cap :i )
+  var digits :bytes 24
+  0 -> var neg :i
+  n -> var u :i
+  n 0 < if 1 -> neg 0 n - -> u then
+  0 -> var dlen :i
+  u 0 = if
+    48 digits i8!
+    1 -> dlen
+  else
+    begin
+      u 0 <>
+    while
+      u 10 umod 48 + digits dlen a+ i8!
+      u 10 u/ -> u
+      1 +-> dlen
+    repeat
+  then
+  var buf :bytes 26
+  0 -> var bi :i
+  neg if 45 buf i8! 1 -> bi then
+  begin
+    dlen 0 >
+  while
+    -1 +-> dlen
+    digits dlen a+ u8@ buf bi a+ i8!
+    1 +-> bi
+  repeat
+  buf bi w dst cap pas_str_raw_w
+end
+
+fn pas_str_char_w ( c :i w :i dst :a cap :i )
+  var b :bytes 1
+  c b i8!
+  b 1 w dst cap pas_str_raw_w
+end
+
+fn pas_str_str_w ( s :a w :i dst :a cap :i )
+  s 1 a+ s u8@ w dst cap pas_str_raw_w
+end
+
+fn pas_enum_str ( e :i tab :a -> :a )
+  tab @ -> var cnt :i
+  e 0 < e cnt >= or if __bool_false return then
+  tab size_i a+ e size_a * a+ a@
+end
+
+fn pas_str_enum_w ( e :i w :i dst :a tab :a cap :i )
+  e tab pas_enum_str -> var s :a
+  s w dst cap pas_str_str_w
+end
+
+fn pas_str_int ( n :i dst :a cap :i )
+  n 0 dst cap pas_str_int_w
+end
+
+fn pas_str_char ( c :i dst :a cap :i )
+  c 0 dst cap pas_str_char_w
+end
+
+fn pas_str_str ( s :a dst :a cap :i )
+  s 0 dst cap pas_str_str_w
+end
+
+fn pas_str_enum ( e :i dst :a tab :a cap :i )
+  e 0 dst tab cap pas_str_enum_w
+end
+
+fn pas_print_enum ( e :i tab :a )
+  e tab pas_enum_str pas_prints
+end
+
+fn pas_print_enum_w ( e :i tab :a w :i )
+  e tab pas_enum_str w pas_prints_w
+end
+
+fn pas_str_float_exp ( x :f w :i dst :a cap :i )
+  var buf :bytes 32
+  0 -> var neg :i
+  0 -> var exp :i
+  x 0.0 f< if
+    1 -> neg
+    x fnegate -> x
+  then
+  x 0.0 f<> if
+    begin x 10.0 f< 0 = while x 10.0 f/ -> x 1 +-> exp repeat
+    begin x 1.0 f< exp -45 > and while x 10.0 f* -> x -1 +-> exp repeat
+  then
+  w 6 - -> var nd :i
+  nd 2 < if 2 -> nd then
+  nd 10 > if 10 -> nd then
+  0.5 -> var rnd :f
+  1 -> var k :i
+  begin k nd < while rnd 10.0 f/ -> rnd 1 +-> k repeat
+  x rnd f+ -> x
+  x 10.0 f< 0 = if x 10.0 f/ -> x 1 +-> exp then
+  0 -> var bi :i
+  neg if 45 else 32 then buf bi a+ i8!
+  1 +-> bi
+  x f>i -> var dig :i
+  dig 9 > if 9 -> dig then
+  dig 0 < if 0 -> dig then
+  dig 48 + buf bi a+ i8!
+  1 +-> bi
+  46 buf bi a+ i8!
+  1 +-> bi
+  x dig i>f f- 10.0 f* -> x
+  1 -> k
+  begin
+    k nd <
+  while
+    x f>i -> dig
+    dig 9 > if 9 -> dig then
+    dig 0 < if 0 -> dig then
+    dig 48 + buf bi a+ i8!
+    1 +-> bi
+    x dig i>f f- 10.0 f* -> x
+    1 +-> k
+  repeat
+  69 buf bi a+ i8!
+  1 +-> bi
+  exp 0 < if 45 buf bi a+ i8! 0 exp - -> exp else 43 buf bi a+ i8! then
+  1 +-> bi
+  exp 10 / 48 + buf bi a+ i8!
+  1 +-> bi
+  exp 10 mod 48 + buf bi a+ i8!
+  1 +-> bi
+  buf bi 0 dst cap pas_str_raw_w
+end
+
+fn pas_str_float_fix ( x :f w :i d :i dst :a cap :i )
+  0 -> var neg :i
+  x 0.0 f< if
+    1 -> neg
+    x fnegate -> x
+  then
+  d 0 < if 0 -> d then
+  d 6 > if 6 -> d then
+  0.5 -> var rnd :f
+  0 -> var k :i
+  begin k d < while rnd 10.0 f/ -> rnd 1 +-> k repeat
+  x rnd f+ -> x
+  x fint -> var ip :f
+  x ip f- -> var fr :f
+  var idig :bytes 24
+  0 -> var ilen :i
+  ip 1.0 f< if
+    48 idig i8!
+    1 -> ilen
+  else
+    begin
+      ip 1.0 f< 0 = ilen 23 < and
+    while
+      ip 10.0 f/ fint -> var nip :f
+      ip nip 10.0 f* f- f>i -> var dig :i
+      dig 9 > if 9 -> dig then
+      dig 0 < if 0 -> dig then
+      dig 48 + idig ilen a+ i8!
+      1 +-> ilen
+      nip -> ip
+    repeat
+  then
+  var buf :bytes 40
+  0 -> var bi :i
+  neg if 45 buf i8! 1 -> bi then
+  begin
+    ilen 0 >
+  while
+    -1 +-> ilen
+    idig ilen a+ u8@ buf bi a+ i8!
+    1 +-> bi
+  repeat
+  d 0 > if
+    46 buf bi a+ i8!
+    1 +-> bi
+    0 -> k
+    begin
+      k d <
+    while
+      fr 10.0 f* -> fr
+      fr f>i -> var fd :i
+      fd 9 > if 9 -> fd then
+      fd 0 < if 0 -> fd then
+      fd 48 + buf bi a+ i8!
+      1 +-> bi
+      fr fd i>f f- -> fr
+      1 +-> k
+    repeat
+  then
+  buf bi w dst cap pas_str_raw_w
+end
+
+fn pas_str_float ( x :f dst :a cap :i )
+  x 16 dst cap pas_str_float_exp
+end
+
+fn pas_putf_exp ( x :f w :i )
+  x w __io_tmp 255 pas_str_float_exp
+  __io_tmp pas_prints
+end
+
+fn pas_putf_fix ( x :f w :i d :i )
+  x w d __io_tmp 255 pas_str_float_fix
+  __io_tmp pas_prints
+end
+
+fn pas_val_int ( s :a dst :a err :a )
+  s u8@ -> var len :i
+  len 31 > if 32 err ! return then
+  1 -> var i :i
+  begin
+    i len <= if s i a+ u8@ 32 = else 0 then
+  while
+    1 +-> i
+  repeat
+  0 -> var neg :i
+  i len <= if
+    s i a+ u8@ -> var c :i
+    c 45 = if 1 -> neg 1 +-> i else c 43 = if 1 +-> i then then
+  then
+  0 -> var hex :i
+  i len <= if
+    s i a+ u8@ 36 = if 1 -> hex 1 +-> i then
+  then
+  0 -> var val :i
+  0 -> var hasd :i
+  var ch :i
+  hex if
+    begin
+      i len <=
+    while
+      s i a+ u8@ -> ch
+      -1 -> var dv :i
+      ch 48 >= ch 57 <= and if ch 48 - -> dv then
+      ch 65 >= ch 70 <= and if ch 55 - -> dv then
+      ch 97 >= ch 102 <= and if ch 87 - -> dv then
+      dv 0 < if i err ! return then
+      1 -> hasd
+      val 16 * dv + -> val
+      1 +-> i
+    repeat
+  else
+    begin
+      i len <=
+    while
+      s i a+ u8@ -> ch
+      ch 48 < ch 57 > or if i err ! return then
+      1 -> hasd
+      val 10 * ch 48 - + -> val
+      1 +-> i
+    repeat
+  then
+  hasd 0 = if i err ! return then
+  neg if 0 val - -> val then
+  val dst !
+  0 err !
+end
+
+fn pas_val_float ( s :a dst :a err :a )
+  s u8@ -> var len :i
+  len 31 > if 32 err ! return then
+  1 -> var i :i
+  0 -> var neg :i
+  0 -> var hasd :i
+  0.0 -> var val :f
+  0.0 -> var fracv :f
+  1.0 -> var scale :f
+  var c :i
+  begin
+    i len <= if s i a+ u8@ 32 = else 0 then
+  while
+    1 +-> i
+  repeat
+  i len <= if
+    s i a+ u8@ -> c
+    c 45 = if 1 -> neg 1 +-> i else c 43 = if 1 +-> i then then
+  then
+  begin
+    i len <= if s i a+ u8@ -> c c 48 >= c 57 <= and else 0 then
+  while
+    1 -> hasd
+    val 10.0 f* c 48 - i>f f+ -> val
+    1 +-> i
+  repeat
+  i len <= if
+    s i a+ u8@ 46 = if
+      1 +-> i
+      begin
+        i len <= if s i a+ u8@ -> c c 48 >= c 57 <= and else 0 then
+      while
+        1 -> hasd
+        scale 10.0 f* -> scale
+        fracv c 48 - i>f scale f/ f+ -> fracv
+        1 +-> i
+      repeat
+    then
+  then
+  val fracv f+ -> val
+  hasd 0 = if i err ! return then
+  i len <= if
+    s i a+ u8@ -> c
+    c 69 = c 101 = or if
+      1 +-> i
+      0 -> var eneg :i
+      0 -> var exp :i
+      i len <= if
+        s i a+ u8@ -> c
+        c 45 = if 1 -> eneg 1 +-> i else c 43 = if 1 +-> i then then
+      then
+      0 -> hasd
+      begin
+        i len <= if s i a+ u8@ -> c c 48 >= c 57 <= and else 0 then
+      while
+        1 -> hasd
+        exp 10 * c 48 - + -> exp
+        1 +-> i
+      repeat
+      hasd 0 = if i err ! return then
+      begin
+        exp 0 >
+      while
+        eneg if val 10.0 f/ -> val else val 10.0 f* -> val then
+        -1 +-> exp
+      repeat
+    then
+  then
+  i len <= if i err ! return then
+  neg if val fnegate -> val then
+  val dst f!
+  0 err !
+end
+
+fn pas_val_enum ( s :a dst :a err :a tab :a )
+  s u8@ 31 > if 32 err ! return then
+  tab @ -> var cnt :i
+  0 -> var idx :i
+  begin
+    idx cnt <
+  while
+    s tab size_i a+ idx size_a * a+ a@ pas_streq if
+      idx dst i8!
+      0 err !
+      return
+    then
+    1 +-> idx
+  repeat
+  1 err !
+end

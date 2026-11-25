@@ -1,0 +1,116 @@
+\ graph_p.ir4 - PASTA/84 graphics runtime (Plot, Point, Draw, Circle, FloodFill, gfxtext hooks)
+
+require "graphics.ir4"
+require "crt_p.ir4"
+
+var __pas_gfx_bg_native :i
+var __pas_gfx_curx :i
+var __pas_gfx_cury :i
+
+fn __pas_rgb ( c :i -> :i )
+  0 -> var r :i
+  0 -> var g :i
+  0 -> var b :i
+  c 2 and 0 <> if 255 -> r then
+  c 4 and 0 <> if 255 -> g then
+  c 1 and 0 <> if 255 -> b then
+  c 8 and 0 <> if
+    r 0 = if 85 -> r then
+    g 0 = if 85 -> g then
+    b 0 = if 85 -> b then
+  then
+  r g b gfxrgb
+end
+
+fn __pas_gfx_clrscr ( )
+  __pas_gfx_bg_c __pas_rgb dup -> __pas_gfx_bg_native gfxcolor
+  gfxclear
+  __pas_gfx_fg_set 0 = if 7 -> __pas_gfx_fg_c then
+  __pas_gfx_fg_c __pas_rgb gfxcolor
+end
+
+fn __pas_gfx_fg ( c :i )
+  c __pas_rgb gfxcolor
+end
+
+fn __pas_gfx_outc ( c :i )
+  c 10 = if 0 -> __pas_txt_x 1 +-> __pas_txt_y return then
+  c 13 = if 0 -> __pas_txt_x return then
+  var ch :bytes 1
+  c ch i8!
+  __pas_txt_x gfxcharw * __pas_txt_y gfxcharh * ch 1 gfxtext
+  1 +-> __pas_txt_x
+end
+
+fn __pas_gfx_prints ( s :a )
+  __pas_txt_x gfxcharw * __pas_txt_y gfxcharh * s 1 a+ s u8@ gfxtext
+  s u8@ +-> __pas_txt_x
+end
+
+fn __pas_gfx_ensure ( )
+  __pas_gfx_active 0 <> if return then
+  & __pas_gfx_clrscr -> __pas_gfx_clrscr_fn
+  & __pas_gfx_fg -> __pas_gfx_fg_fn
+  & __pas_gfx_outc -> __pas_gfx_outc_fn
+  & __pas_gfx_prints -> __pas_gfx_prints_fn
+  1 -> __pas_gfx_active
+  256 176 4 gfxinit
+  __pas_gfx_clrscr
+end
+
+fn pas_setcolor ( c :i )
+  __pas_gfx_ensure
+  c -> __pas_gfx_fg_c
+  1 -> __pas_gfx_fg_set
+  c __pas_rgb gfxcolor
+end
+
+fn pas_setgraphmode ( m :i )
+  m 0 = if
+    __pas_gfx_active 0 <> if
+      gfxdone
+      0 -> __pas_gfx_active
+      0 -> __pas_txt_x
+      0 -> __pas_txt_y
+    then
+    return
+  then
+  __pas_gfx_ensure
+end
+
+fn pas_border ( c :i )
+  c __pas_rgb gfxborder
+end
+
+fn pas_plot ( x :i y :i )
+  __pas_gfx_ensure
+  x -> __pas_gfx_curx
+  y -> __pas_gfx_cury
+  x y gfxpx
+end
+
+fn pas_draw ( dx :i dy :i )
+  __pas_gfx_ensure
+  __pas_gfx_curx dx + -> var nx :i
+  __pas_gfx_cury dy + -> var ny :i
+  __pas_gfx_curx __pas_gfx_cury nx ny gfxline
+  nx -> __pas_gfx_curx
+  ny -> __pas_gfx_cury
+end
+
+fn pas_circle ( cx :i cy :i r :i )
+  __pas_gfx_ensure
+  cx cy r gfxcircle
+end
+
+fn pas_floodfill ( x :i y :i )
+  __pas_gfx_ensure
+  x y gfxfill
+end
+
+fn pas_point ( x :i y :i -> :i )
+  __pas_gfx_ensure
+  x y gfxgetpx -> var c :i
+  c 0 < if 0 return then
+  c __pas_gfx_bg_native <> if 1 else 0 then
+end

@@ -1,0 +1,78 @@
+\ crt_p.ir4 - PASTA/84 CRT text screen, color, cursor, and keyboard runtime
+
+require "stdio.ir4"
+require "terminal.ir4"
+
+var __pas_txt_x :i
+var __pas_txt_y :i
+var __pas_gfx_fg_set :i
+var __pas_gfx_fg_c :i
+var __pas_gfx_bg_c :i
+var __pas_key_buf :i
+
+var __pas_gfx_active :i
+var __pas_gfx_clrscr_fn :a
+var __pas_gfx_fg_fn :a
+var __pas_gfx_outc_fn :a
+var __pas_gfx_prints_fn :a
+
+fn __pas_ansi_col ( c :i -> :i )
+  c 8 and
+  c 4 and 1 u>> or
+  c 2 and 1 u>> or
+  c 1 and 2 << or
+end
+
+fn pas_clrscr ( )
+  0 -> __pas_txt_x
+  0 -> __pas_txt_y
+  __pas_gfx_active 0 <> if
+    __pas_gfx_clrscr_fn ( )
+  else
+    termclear
+  then
+end
+
+fn pas_gotoxy ( x :i y :i )
+  x 1 - -> var gx :i
+  gx 0 < if 0 -> gx then
+  y 1 - -> var gy :i
+  gy 0 < if 0 -> gy then
+  gx -> __pas_txt_x
+  gy -> __pas_txt_y
+  __pas_gfx_active 0 = if gx gy termgoto then
+end
+
+fn pas_textfg ( c :i )
+  c -> __pas_gfx_fg_c
+  1 -> __pas_gfx_fg_set
+  __pas_gfx_active 0 <> if c __pas_gfx_fg_fn ( :i ) else c __pas_ansi_col termfg then
+end
+
+fn pas_textbg ( c :i )
+  c -> __pas_gfx_bg_c
+  __pas_gfx_active 0 = if c __pas_ansi_col termbg then
+end
+
+fn pas_cursor_on ( )
+  __pas_gfx_active 0 = if 1 termcursor then
+end
+
+fn pas_cursor_off ( )
+  __pas_gfx_active 0 = if 0 termcursor then
+end
+
+fn pas_keypressed ( -> :i )
+  __pas_key_buf 0 <> if 1 return then
+  inkey -> __pas_key_buf
+  __pas_key_buf 0 <> if 1 else 0 then
+end
+
+fn pas_readkey ( -> :i )
+  __pas_key_buf 0 <> if
+    __pas_key_buf -> var k :i
+    0 -> __pas_key_buf
+    k return
+  then
+  xkey
+end
