@@ -4,6 +4,7 @@
 
 program Pasta;
 
+{$b-}
 {$ifndef SYS_IR4}
 {$mode delphi}
 
@@ -379,6 +380,10 @@ end;
  * Returns the compiler's home directory (where it is installed).
  *)
 function GetHomeDir: String;
+{$ifdef SYS_IR4}
+var
+  S: String;
+{$endif}
 begin
   {$ifndef SYS_IR4}
   {$ifdef darwin}
@@ -394,8 +399,9 @@ begin
   if Result = '' then Result := FAbsolute('.');
   {$endif}
   {$else}
-  GetHomeDir := ParentDir(FAbsolute(NativeToPosix(ParamStr(0))));
-  if GetHomeDir = '' then GetHomeDir := FAbsolute('.');
+  S := ParentDir(FAbsolute(NativeToPosix(ParamStr(0))));
+  if S = '' then S := FAbsolute('.');
+  GetHomeDir := S;
   {$endif}
 end;
 
@@ -1262,6 +1268,7 @@ var
   ScannerMuted: Boolean;                // Whether the scanner is muted
 
   IOMode: Boolean;                      // Controls IO checking
+  CompleteBool: Boolean;                // Controls {$B+}/{$B-} Boolean evaluation
 
 (**
  * Clears all defines. Needed for multiple compiler runs in IDE.
@@ -1408,6 +1415,7 @@ var
 
       case C of
         'a', 'k', 'u': ;
+        'b': CompleteBool := B;
         'i': IOMode := B;
       else
         Invalid;
@@ -2566,7 +2574,10 @@ end;
  * offset.
  *)
 procedure EmitAddress(Sym: PSymbol);
+var
+  CurLevel: Integer;
 begin
+  CurLevel := Level;
   with Sym^ do
   begin
     if (Tag <> '') and (Tag <> 'RESULT') then
@@ -2580,7 +2591,7 @@ begin
     end
     else
     begin
-      if (Sym^.Level > 0) and (Sym^.Level <> Level) then
+      if (Sym^.Level > 0) and (Sym^.Level <> CurLevel) then
         EmitI('__display ' + IntToStr(Sym^.Level) + ' size_a * a+ a@')
       else
         EmitI('_locals');
@@ -2658,12 +2669,12 @@ end;
 procedure EmitRelOp(Op: TToken);
 begin
   case Op of
-    toEq:  EmitI('=');
-    toNeq: EmitI('<>');
-    toLt:  EmitI('<');
-    toGt:  EmitI('>');
-    toLeq: EmitI('<=');
-    toGeq: EmitI('>=');
+    toEq:  EmitI('= 1 and');
+    toNeq: EmitI('<> 1 and');
+    toLt:  EmitI('< 1 and');
+    toGt:  EmitI('> 1 and');
+    toLeq: EmitI('<= 1 and');
+    toGeq: EmitI('>= 1 and');
   end;
 end;
 
@@ -2673,12 +2684,12 @@ end;
 procedure EmitPtrOp(Op: TToken);
 begin
   case Op of
-    toEq:  EmitI('a=');
-    toNeq: EmitI('a<>');
-    toLt:  EmitI('a<');
-    toGt:  EmitI('a>');
-    toLeq: EmitI('a> 0 =');
-    toGeq: EmitI('a< 0 =');
+    toEq:  EmitI('a= 1 and');
+    toNeq: EmitI('a<> 1 and');
+    toLt:  EmitI('a< 1 and');
+    toGt:  EmitI('a> 1 and');
+    toLeq: EmitI('a> 0 = 1 and');
+    toGeq: EmitI('a< 0 = 1 and');
   end;
 end;
 
@@ -2690,12 +2701,12 @@ procedure EmitUnOp(Op: TToken; DataType: PSymbol); forward;
 procedure EmitStrOp(Op: TToken);
 begin
   case Op of
-    toEq:  EmitI('pas_streq');
-    toNeq: EmitI('pas_streq 0 =');
-    toLt:  EmitI('pas_strcmp 0 <');
-    toLeq: EmitI('pas_strcmp 0 <=');
-    toGt:  EmitI('pas_strcmp 0 >');
-    toGeq: EmitI('pas_strcmp 0 >=');
+    toEq:  EmitI('pas_streq 1 and');
+    toNeq: EmitI('pas_streq 0 = 1 and');
+    toLt:  EmitI('pas_strcmp 0 < 1 and');
+    toLeq: EmitI('pas_strcmp 0 <= 1 and');
+    toGt:  EmitI('pas_strcmp 0 > 1 and');
+    toGeq: EmitI('pas_strcmp 0 >= 1 and');
   end;
 end;
 
@@ -2707,14 +2718,14 @@ procedure EmitNeg(DataType: PSymbol); forward;
 procedure EmitSetOp(Op: TToken);
 begin
   case Op of
-    toIn:  EmitI('pas_set_in');
+    toIn:  EmitI('pas_set_in 1 and');
     toAdd: EmitI(AllocIR4Temp(32) + ' pas_set_add');
     toSub: EmitI(AllocIR4Temp(32) + ' pas_set_sub');
     toMul: EmitI(AllocIR4Temp(32) + ' pas_set_mul');
-    toEq:  EmitI('pas_set_eq');
-    toNeq: EmitI('pas_set_eq 0 =');
-    toLeq: EmitI('pas_set_leq');
-    toGeq: EmitI('pas_set_geq');
+    toEq:  EmitI('pas_set_eq 1 and');
+    toNeq: EmitI('pas_set_eq 0 = 1 and');
+    toLeq: EmitI('pas_set_leq 1 and');
+    toGeq: EmitI('pas_set_geq 1 and');
   end;
 end;
 
@@ -2728,12 +2739,12 @@ begin
     toSub: EmitI('f-');
     toMul: EmitI('f*');
     toDiv: EmitI('f/');
-    toEq:  EmitI('f=');
-    toNeq: EmitI('f<>');
-    toLt:  EmitI('f<');
-    toGt:  EmitI('f>');
-    toLeq: EmitI('f> 0 =');
-    toGeq: EmitI('f< 0 =');
+    toEq:  EmitI('f= 1 and');
+    toNeq: EmitI('f<> 1 and');
+    toLt:  EmitI('f< 1 and');
+    toGt:  EmitI('f> 1 and');
+    toLeq: EmitI('f> 0 = 1 and');
+    toGeq: EmitI('f< 0 = 1 and');
   else
     Error(TokenStr[Op] + ' not allowed for Real');
   end;
@@ -2789,7 +2800,7 @@ begin
   if Op = toNot then
   begin
     if DataType = dtBoolean then
-      EmitI('0 =')
+      EmitI('0 = 1 and')
     else
       EmitI('-1 xor');
   end;
@@ -4632,8 +4643,17 @@ begin
     begin
       Op := Scanner.Token;
       NextToken;
-      T := TypeCheck(T, ParseFactor, tcExact);
-      EmitBinOp(Op, T);
+      if CompleteBool then
+      begin
+        T := TypeCheck(T, ParseFactor, tcExact);
+        EmitBinOp(Op, T);
+      end
+      else
+      begin
+        EmitI('if');
+        T := TypeCheck(T, ParseFactor, tcExact);
+        EmitI('else 0 then');
+      end;
     end
   else if T = dtReal then
     while Scanner.Token in [toMul, toDiv, toMod] do
@@ -4681,8 +4701,17 @@ begin
     begin
       Op := Scanner.Token;
       NextToken;
-      T := TypeCheck(T, ParseTerm, tcExact);
-      EmitBinOp(Op, T);
+      if CompleteBool or (Op = toXor) then
+      begin
+        T := TypeCheck(T, ParseTerm, tcExact);
+        EmitBinOp(Op, T);
+      end
+      else
+      begin
+        EmitI('if 1 else');
+        T := TypeCheck(T, ParseTerm, tcExact);
+        EmitI('then');
+      end;
     end
   else if (T = dtChar) or (T^.Kind = scStringType) then
   begin
@@ -6629,6 +6658,7 @@ begin
   Source := nil;
 
   IOMode := True;
+  CompleteBool := True;
   Muted := 0;
 
   IfDefLevel := -1;
@@ -6785,6 +6815,7 @@ begin
   IfDefLevel := -1;
   ScannerMuted := False;
   IOMode := True;
+  CompleteBool := True;
   Muted := 0;
 
   if ParamStr(1) = '--version' then
