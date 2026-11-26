@@ -44,3 +44,17 @@ local
 /examples/*.sym
 /examples/*.tap
 /examples/*.z80
+/ide/*.[0-9][0-9][0-9]
+/ide/*.bin
+/ide/*.brk
+/ide/*.com
+/ide/*.ir4
+/ide/*.log
+/ide/*.lst
+/ide/*.ovr
+/ide/*.p
+/ide/*.prg
+/ide/*.sna
+/ide/*.sym
+/ide/*.tap
+/ide/*.z80

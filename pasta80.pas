@@ -639,6 +639,8 @@ end;
 function GetLabel(Prefix: String): String; forward;
 
 type
+  TLblStr = String[31];
+
   (**
    * A linked list of string constants used in the program. No duplicates. The
    * strings are written at the end of parsing each overlay and at the end of
@@ -649,7 +651,7 @@ type
    *)
   PStringLiteral = ^TStringLiteral;
   TStringLiteral = record
-    Tag: String;
+    Tag: TLblStr;
     Value: String;
     Next: PStringLiteral;
   end;
@@ -722,16 +724,21 @@ type
    * size of a type. This, although working, is slightly ugly and maybe worth a
    * clean-up.
    *)
+  TSymStr = String[47];
   PSymbol = ^TSymbol;
+  PParamList = ^TParamList;
+  TParamList = record
+    Types: array[0..15] of PSymbol;
+    IsRef: array[0..15] of Boolean;
+  end;
   TSymbol = record
-    Name: String;                       // Name of the symbol
+    Name: TSymStr;                      // Name of the symbol
     Kind: TSymbolClass;                 // Kind of the symbol
     DataType: PSymbol;                  // Data type, array type or return type
-    ArgTypes: array[0..15] of PSymbol;  // Procedure/function parameter types
-    ArgIsRef: array[0..15] of Boolean;  // Procedure/function "var" parameters
+    Params: PParamList;                 // Procedure/function parameter list (nil if 0 params)
     Level: Integer;                     // Level of procedure/function, 0=global
     Value, Value2: Integer;             // Value(s) or size(s) of symbol
-    Tag: String;                        // External label or address of symbol
+    Tag: TSymStr;                       // External label or address of symbol
     IndexType: PSymbol;                 // Index type of arrays
     Low, High: Integer;                 // Values of a range or an array index
     Prev, Next: PSymbol;                // Previous and next in linked list
@@ -813,6 +820,9 @@ begin
   if (Sym^.Kind in [scProc, scFunc]) and (Sym^.SavedParams <> nil) then
     while Sym^.SavedParams <> nil do
       FreeAndNilSymbol(Sym^.SavedParams);
+
+  if Sym^.Params <> nil then
+    Dispose(Sym^.Params);
 
   Dispose(Sym);
 
@@ -970,13 +980,16 @@ begin
     I := I - 1;
   Sym^.Value := I;
 
+  if (I > 0) and (Sym^.Params = nil) then
+    New(Sym^.Params);
+
   Sym2 := SymbolTable;
   while I > 0 do
   begin
     if Sym2^.Kind = scVar then
     begin
-      Sym^.ArgTypes[I-1] := Sym2^.DataType;
-      Sym^.ArgIsRef[I-1] := Sym2^.IsRef;
+      Sym^.Params^.Types[I-1] := Sym2^.DataType;
+      Sym^.Params^.IsRef[I-1] := Sym2^.IsRef;
       I := I - 1;
     end;
     Sym2 := Sym2^.Prev;
@@ -1513,7 +1526,7 @@ const
    * type accordingly. Also all tokens representing keywords are in one large,
    * alphabetically sorted block.
    *)
-  TokenStr: array[TToken] of String =
+  TokenStr: array[TToken] of String[15] =
            ('<nul>', '{...}',
             'Identifier', 'Number', 'String', 'Real', '+', '-', '*', '/',
             '=', '#', '<', '<=', '>', '>=', '(', ')', '[', ']',
@@ -2123,6 +2136,7 @@ end;
 procedure IR4Out((* const *) S: String);
 var
   Chunk: PIR4Chunk;
+  Fit: Integer;
 begin
   if Length(S) = 0 then Exit;
   if not IR4Buffering then
@@ -2130,19 +2144,25 @@ begin
     Write(Target, S);
     Exit;
   end;
-  if (IR4Tail <> nil) and (Length(IR4Tail^.Text) + Length(S) <= 255) then
-    IR4Tail^.Text := IR4Tail^.Text + S
-  else
+  if (IR4Tail <> nil) and (Length(IR4Tail^.Text) < 255) then
   begin
-    New(Chunk);
-    Chunk^.Text := S;
-    Chunk^.Next := nil;
-    if IR4Tail <> nil then
-      IR4Tail^.Next := Chunk
-    else
-      IR4Head := Chunk;
-    IR4Tail := Chunk;
+    Fit := 255 - Length(IR4Tail^.Text);
+    if Fit >= Length(S) then
+    begin
+      IR4Tail^.Text := IR4Tail^.Text + S;
+      Exit;
+    end;
+    IR4Tail^.Text := IR4Tail^.Text + Copy(S, 1, Fit);
+    S := Copy(S, Fit + 1, 255);
   end;
+  New(Chunk);
+  Chunk^.Text := S;
+  Chunk^.Next := nil;
+  if IR4Tail <> nil then
+    IR4Tail^.Next := Chunk
+  else
+    IR4Head := Chunk;
+  IR4Tail := Chunk;
 end;
 
 procedure IR4OutLn((* const *) S: String);
@@ -3312,7 +3332,7 @@ procedure ParseArgument(Sym: PSymbol; I: Integer);
 var
   Sym2, T: PSymbol;
 begin
-  if Sym^.ArgIsRef[I] then
+  if Sym^.Params^.IsRef[I] then
   begin
     Expect(toIdent);
     Sym2 := LookupGlobalOrFail(Scanner.StrValue);
@@ -3331,11 +3351,11 @@ begin
       if T = dtPointer then T := dtUnknown else T := T^.DataType;
       T := ParseVariableChain(T);
     end;
-    if Sym^.ArgTypes[I] <> nil then
-      TypeCheck(Sym^.ArgTypes[I], T, tcAssign);
+    if Sym^.Params^.Types[I] <> nil then
+      TypeCheck(Sym^.Params^.Types[I], T, tcAssign);
   end
   else
-    TypeCheck(Sym^.ArgTypes[I], ParseExpression, tcAssign);
+    TypeCheck(Sym^.Params^.Types[I], ParseExpression, tcAssign);
 end;
 
 (**
@@ -3665,7 +3685,7 @@ end;
  *
  * TODO Split this into multiple procedures?
  *)
-procedure ParseBuiltInProcedure(Proc: PSymbol; BreakTarget, ContTarget: String);
+procedure ParseBuiltInProcedure(Proc: PSymbol; BreakTarget, ContTarget: TLblStr);
 var
   Sym, T, TT, V, U, ExprType: PSymbol;
   F: Integer;
@@ -3923,6 +3943,7 @@ begin
       if T = dtText then
       begin
         EmitI('-> __cur_file');
+        IR4Frame := IR4BaseFrame;
 
         while Scanner.Token = toComma do
         begin
@@ -3943,6 +3964,7 @@ begin
 
           EmitI('__cur_file __text_buf');
           EmitCall(LookupBuiltInOrFail('TextWriteStr'));
+          IR4Frame := IR4BaseFrame;
         end;
 
         if Proc = WriteLnProc then
@@ -3975,6 +3997,7 @@ begin
           1: EmitWrite1(T);
           2: EmitWrite2(T);
         end;
+        IR4Frame := IR4BaseFrame;
 
         while Scanner.Token = toComma do
         begin
@@ -3985,6 +4008,7 @@ begin
             1: EmitWrite1(T);
             2: EmitWrite2(T);
           end;
+          IR4Frame := IR4BaseFrame;
         end;
 
         if Proc = WriteLnProc then EmitI('cr');
@@ -4829,7 +4853,7 @@ begin
   EmitStore(T);
 end;
 
-procedure ParseStatement(ContTarget, BreakTarget: String); forward;
+procedure ParseStatement(ContTarget, BreakTarget: TLblStr); forward;
 
 (**
  * Parses a single "with" variable, which must be of a record type. Creates
@@ -4882,7 +4906,7 @@ end;
  * or a list of such variables and making the contained fields directly
  * accessible as variables.
  *)
-procedure ParseWith(ContTarget, BreakTarget: String);
+procedure ParseWith(ContTarget, BreakTarget: TLblStr);
 var
   OldSymbols: PSymbol;
   OldBase, SavedFrame: TIR4Tuple;
@@ -4926,12 +4950,13 @@ begin
           IR4CaseTemp + ' @ ' + IntToStr(High) + ' <= and 0 = jz ' + OfTarget);
 end;
 
-procedure ParseStatementList(ContTarget, BreakTarget: String); forward;
+procedure ParseStatementList(ContTarget, BreakTarget: TLblStr); forward;
 
-procedure ParseCaseStatement(ContTarget, BreakTarget: String);
+procedure ParseCaseStatement(ContTarget, BreakTarget: TLblStr);
 var
   T: PSymbol;
-  OfTarget, NextTest, EndTarget, SavedCase: String;
+  OfTarget, NextTest, EndTarget: TLblStr;
+  SavedCase: String[63];
   OldBase, SavedFrame: TIR4Tuple;
 begin
   EndTarget := GetLabel('end');
@@ -4939,6 +4964,7 @@ begin
   NextToken;
   T := CheckScalar(ParseExpression);
 
+  IR4Frame := IR4BaseFrame;
   SavedFrame := IR4Frame;
   OldBase := IR4BaseFrame;
   SavedCase := IR4CaseTemp;
@@ -5000,12 +5026,13 @@ end;
 procedure ParseStatement;
 var
   Sym: PSymbol;
-  Tag, Tag2, Tag3, Tag4: String;
-  StartTmp, CntTmp: String;
+  Tag, Tag2, Tag3, Tag4: TLblStr;
+  StartTmp, CntTmp: String[63];
   OldBase, SavedFrame: TIR4Tuple;
   Delta: Integer;
   T: PSymbol;
 begin
+  IR4Frame := IR4BaseFrame;
 
   if Scanner.Token = toNumber then
   begin
@@ -5086,31 +5113,39 @@ begin
   end
   else if Scanner.Token = toIf then
   begin
-    NextToken; TypeCheck(dtBoolean, ParseExpression, tcExact); Expect(toThen); NextToken;
+    Tag2 := '';
+    repeat
+      NextToken; TypeCheck(dtBoolean, ParseExpression, tcExact); Expect(toThen); NextToken;
 
-    Tag := GetLabel('false');
+      Tag := GetLabel('false');
 
-    EmitJumpIf(False, Tag);
+      EmitJumpIf(False, Tag);
+      IR4Frame := IR4BaseFrame;
 
-    ParseStatement(ContTarget, BreakTarget);
-
-    if Scanner.Token = toElse then
-    begin
-      Tag2 := GetLabel('endif');
-      EmitJump(Tag2);
-
-      Emit(Tag, '', '');
-
-      NextToken;
       ParseStatement(ContTarget, BreakTarget);
 
-      Emit(Tag2, '', '');
-    end
-    else
-    begin
-      Emit(Tag, '', '');
-    end;
+      if Scanner.Token = toElse then
+      begin
+        if Tag2 = '' then Tag2 := GetLabel('endif');
+        EmitJump(Tag2);
 
+        Emit(Tag, '', '');
+
+        NextToken;
+        if Scanner.Token <> toIf then
+        begin
+          ParseStatement(ContTarget, BreakTarget);
+          Break;
+        end;
+      end
+      else
+      begin
+        Emit(Tag, '', '');
+        Break;
+      end;
+    until False;
+
+    if Tag2 <> '' then Emit(Tag2, '', '');
   end
   else if Scanner.Token = toWhile then
   begin
@@ -5124,6 +5159,7 @@ begin
     NextToken; TypeCheck(dtBoolean, ParseExpression, tcExact); Expect(toDo); NextToken;
 
     EmitJumpIf(False, Tag2);
+    IR4Frame := IR4BaseFrame;
 
     ParseStatement(Tag, Tag2);
 
@@ -5170,6 +5206,7 @@ begin
     EmitAddress(Sym);
     NextToken; Expect(toBecomes); NextToken; TypeCheck(Sym^.DataType, ParseExpression, tcAssign);
 
+    IR4Frame := IR4BaseFrame;
     SavedFrame := IR4Frame;
     OldBase := IR4BaseFrame;
     StartTmp := AllocIR4TempTuple(0, 1, 0, 0);
@@ -5182,6 +5219,7 @@ begin
     else Error('"to" or "downto" expected.');
     NextToken; TypeCheck(Sym^.DataType, ParseExpression, tcAssign); Expect(toDo);
     EmitI(CntTmp + ' !');
+    IR4Frame := IR4BaseFrame;
     Tag := GetLabel('forloop');
     Tag3 := GetLabel('forbreak');
     Tag4 := GetLabel('fornext');
@@ -5237,6 +5275,8 @@ begin
 
     NextToken;
   end;
+
+  IR4Frame := IR4BaseFrame;
 end;
 
 function ParseTypeDef: PSymbol; forward;
@@ -6344,11 +6384,11 @@ begin
         S := 'fwd ' + NewSym^.Tag + ' (';
         for I := 0 to NewSym^.Value - 1 do
         begin
-          if NewSym^.ArgIsRef[I] then
+          if NewSym^.Params^.IsRef[I] then
             S := S + ' p' + IntToStr(I) + ' :a'
-          else if NewSym^.ArgTypes[I] = dtReal then
+          else if NewSym^.Params^.Types[I] = dtReal then
             S := S + ' p' + IntToStr(I) + ' :f'
-          else if NewSym^.ArgTypes[I]^.Kind in [scPointerType, scStringType, scSetType, scArrayType, scRecordType] then
+          else if NewSym^.Params^.Types[I]^.Kind in [scPointerType, scStringType, scSetType, scArrayType, scRecordType] then
             S := S + ' p' + IntToStr(I) + ' :a'
           else
             S := S + ' p' + IntToStr(I) + ' :i';
