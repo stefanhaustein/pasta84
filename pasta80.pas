@@ -903,15 +903,29 @@ end;
 function Lookup(Name: string; Start, Stop: PSymbol): PSymbol;
 var
   Sym: PSymbol;
+  L, I: Integer;
+  C: Char;
 begin
   Name := UpperStr(Name);
+  L := Length(Name);
   Sym := Start;
   while Sym <> Stop do
   begin
-    if UpperStr(Sym^.Name) = Name then
+    if Length(Sym^.Name) = L then
     begin
-      Lookup := Sym;
-      Exit;
+      I := L;
+      while I > 0 do
+      begin
+        C := Sym^.Name[I];
+        if (C >= 'a') and (C <= 'z') then C := Chr(Ord(C) - 32);
+        if C <> Name[I] then Break;
+        Dec(I);
+      end;
+      if I = 0 then
+      begin
+        Lookup := Sym;
+        Exit;
+      end;
     end;
     Sym := Sym^.Prev;
   end;
@@ -6777,7 +6791,7 @@ end;
 procedure Copyright;
 begin
   WriteLn('----------------------------------------');
-  WriteLn('PASTA/84 Pascal System', 'Version ' + Version:18);
+  WriteLn('PASTA/80 Pascal System', 'Version ' + Version:18);
   WriteLn('IR4th backend':40);
   WriteLn;
   WriteLn('Copyright (C) 2020-26 by  Joerg Pleumann');

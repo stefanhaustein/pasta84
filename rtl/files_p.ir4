@@ -438,3 +438,8 @@ fn pas_text_writeeoln ( f :a )
   f @ 10 fsputc 0 < if 1 __lasterror i8! return then
   0 __lasterror i8!
 end
+
+fn pas_block_append ( f :a )
+  f drop
+  1 __lasterror i8!
+end

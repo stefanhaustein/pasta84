@@ -33,6 +33,10 @@ fn pas_clrscr ( )
   then
 end
 
+fn pas_clreol ( )
+  __pas_gfx_active 0 = if termcleareol then
+end
+
 fn pas_gotoxy ( x :i y :i )
   x 1 - -> var gx :i
   gx 0 < if 0 -> gx then
@@ -41,6 +45,16 @@ fn pas_gotoxy ( x :i y :i )
   gx -> __pas_txt_x
   gy -> __pas_txt_y
   __pas_gfx_active 0 = if gx gy termgoto then
+end
+
+fn pas_wherex ( -> :i )
+  termx -> var x :i
+  x 0 < if __pas_txt_x 1 + else x 1 + then
+end
+
+fn pas_wherey ( -> :i )
+  termy -> var y :i
+  y 0 < if __pas_txt_y 1 + else y 1 + then
 end
 
 fn pas_textfg ( c :i )

@@ -1,0 +1,36 @@
+\ agon_p.ir4 - Agon-specific PASTA/84 helpers (scrchar, mos_oscli)
+
+require "stdio.ir4"
+
+code agon __agon_pas_sv ( -> :a )
+  0x3E :i8 0x08 :i8 0x5B :i8 0xCF :i8
+  0xDD :i8 0xE5 :i8 0xE1 :i8
+  0xD1 :i8 0xE5 :i8 0xD5 :i8
+end
+
+\ Read character at 0-based (x, y) from Agon VDP via VDU 23,0,&83
+fn pas_scrchar ( x :i y :i -> :i )
+  __agon_pas_sv -> var sv :a
+  sv 4 a+ -> var pf :a
+  pf u8@ 253 and pf i8!
+  23 emit 0 emit 0x83 emit
+  x 255 and emit x 8 >> 255 and emit
+  y 255 and emit y 8 >> 255 and emit
+  20000 -> var spin :i
+  begin spin 0 > pf u8@ 2 and 0 = and while
+    -1 +-> spin
+  repeat
+  pf u8@ 2 and 0 = if 0 return then
+  sv 9 a+ u8@
+end
+
+\ Call MOS $10 (mos_oscli) in ADL=1 with NUL-terminated command string
+code agon pas_mos_oscli ( cmd :i -> :i )
+  0xD1 :i8 0xE1 :i8 0xD5 :i8
+  0xDD :i8 0xE5 :i8 0xFD :i8 0xE5 :i8
+  0x40 :i8 0x31 :i8 0x00 :i8 0x00 :i8
+  0x3E :i8 0x10 :i8 0x5B :i8 0xCF :i8
+  0xFD :i8 0xE1 :i8 0xDD :i8 0xE1 :i8
+  0x21 :i8 0x00 :i8 0x00 :i8 0x00 :i8 0x6F :i8
+  0xD1 :i8 0xE5 :i8 0xD5 :i8
+end
