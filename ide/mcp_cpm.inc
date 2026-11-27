@@ -7,7 +7,7 @@ const
 type
   TSubRec = array[0..127] of Char;
 
-procedure MakeSubRec(Cmd: TStr80; var Rec: TSubRec);
+procedure MakeSubRec(var Cmd: String; var Rec: TSubRec);
 var
   I, L: Integer;
 begin
@@ -19,7 +19,7 @@ begin
     Rec[I] := UpCase(Cmd[I]);
 end;
 
-procedure WriteSub(Cmd1, Cmd2: TStr80);
+procedure WriteSub(Cmd1, Cmd2: String);
 var
   F: File;
   Rec: TSubRec;
@@ -48,7 +48,7 @@ begin
   {$I+}
 end;
 
-function StripComExt(Name: TStr80): TStr80;
+function StripComExt(var Name: String): String;
 var
   I: Integer;
 begin
@@ -64,7 +64,7 @@ begin
   StripComExt := Name;
 end;
 
-function HasExt(Name, Ext: TStr80): Boolean;
+function HasExt(var Name: String; Ext: TStr16): Boolean;
 var
   L, EL, I: Integer;
 begin
@@ -87,7 +87,7 @@ end;
 procedure RunIdeLoop;
 var
   BinOk: Boolean;
-  BuildCmd: TStr80;
+  BuildCmd: String;
 begin
   if not ReadRequest then
   begin

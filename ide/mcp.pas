@@ -7,14 +7,47 @@ const
   ErrFile = 'PANO.ERR';
 
 type
-  TStr80 = String[64];
+  TStr40 = String[40];
   TStr16 = String[15];
 
 var
-  SrcFile, OutBin: TStr80;
+  SrcFile, OutBin: String;
   RowS, ColS, Act: TStr16;
 
-function FileExists(Name: TStr80): Boolean;
+procedure AppendSub(var Dst, Src: String; Start, Count: Integer);
+var
+  DL, SL, Avail: Integer;
+begin
+  SL := Length(Src);
+  if (Start < 1) or (Start > SL) or (Count <= 0) then Exit;
+  Avail := SL - Start + 1;
+  if Count > Avail then Count := Avail;
+  DL := Length(Dst);
+  if DL + Count > 255 then Count := 255 - DL;
+  if Count <= 0 then Exit;
+  Move(Src[Start], Dst[DL + 1], Count);
+  SetLength(Dst, DL + Count);
+end;
+
+procedure AppendVar(var Dst, Src: String);
+begin
+  AppendSub(Dst, Src, 1, Length(Src));
+end;
+
+procedure AppendLit(var Dst: String; Lit: TStr40);
+var
+  DL, LL: Integer;
+begin
+  LL := Length(Lit);
+  if LL <= 0 then Exit;
+  DL := Length(Dst);
+  if DL + LL > 255 then LL := 255 - DL;
+  if LL <= 0 then Exit;
+  Move(Lit[1], Dst[DL + 1], LL);
+  SetLength(Dst, DL + LL);
+end;
+
+function FileExists(var Name: String): Boolean;
 var
   T: Text;
   Err: Byte;
@@ -34,7 +67,7 @@ begin
   {$I+}
 end;
 
-procedure DeleteIfExists(Name: TStr80);
+procedure DeleteIfExists(Name: String);
 var
   T: Text;
   Err: Byte;

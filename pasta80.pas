@@ -520,6 +520,52 @@ var
    * The pointer to the current source file.
    *)
   Source: PSource;
+  StatusLen: Integer;
+
+function ShortFileName(var S: String): String;
+var
+  I: Integer;
+begin
+  I := Length(S);
+  while (I > 0) and (S[I] <> '/') and (S[I] <> '\') do
+    Dec(I);
+  ShortFileName := Copy(S, I + 1, 255);
+end;
+
+procedure ShowStatus(S: String);
+{$ifdef SYS_IR4}
+var
+  NewLen, I: Integer;
+begin
+  Write(#13, '  ', S);
+  NewLen := Length(S) + 2;
+  for I := NewLen + 1 to StatusLen do
+    Write(' ');
+  StatusLen := NewLen;
+end;
+{$else}
+begin
+end;
+{$endif}
+
+procedure ClearStatus;
+{$ifdef SYS_IR4}
+var
+  I: Integer;
+begin
+  if StatusLen > 0 then
+  begin
+    Write(#13);
+    for I := 1 to StatusLen do
+      Write(' ');
+    Write(#13);
+    StatusLen := 0;
+  end;
+end;
+{$else}
+begin
+end;
+{$endif}
 
 (**
  * Open the given input file. The same procedure is called for the initial
@@ -571,6 +617,7 @@ begin
   end;
 
   Source := Tmp;
+  ShowStatus('Reading ' + ShortFileName(FileName) + '...');
 end;
 
 (**
@@ -614,6 +661,8 @@ begin
       EmitC('[' + IntToStr(Line) + '] ' + Buffer); // TODO Make this configurable?
       Buffer := Buffer + #13;
       Line := Line + 1;
+      if (Line and 31) = 0 then
+        ShowStatus(ShortFileName(Name) + ':' + IntToStr(Line));
       Column := 1;
     end;
 
@@ -2040,6 +2089,7 @@ procedure Error;
 var
   I: Integer;
 begin
+  ClearStatus;
   WriteLn;
 
   if Source <> nil then
@@ -6615,6 +6665,7 @@ procedure ParseProgram;
 var
   Sym, BuiltInSym: PSymbol;
 begin
+  ShowStatus('Initializing built-ins...');
   OpenScope(False);
   RegisterAllBuiltIns;
 
@@ -6676,6 +6727,7 @@ begin
   end;
   parseBlock(nil);
   Expect(toPeriod);
+  ShowStatus('Finalizing...');
   EmitStrings(nil);
 
   CloseScope(False);
@@ -6687,6 +6739,7 @@ end;
  *)
 procedure ResetCompiler;
 begin
+  StatusLen := 0;
   ClearIR4Chunks;
   IR4FnSig := '';
   IR4LineOpen := False;
@@ -6760,8 +6813,10 @@ begin
     ParseProgram;
     EmitFooter;
 
+    ShowStatus('Flushing output...');
     CloseTarget;
     while Source <> nil do CloseInput;
+    ClearStatus;
 
     Duration := (GetMSCount - StartTime) / 1000.0;
 

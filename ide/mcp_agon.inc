@@ -1,47 +1,55 @@
 { mcp_agon.inc - Agon MOSlet resident IDE runner for mcp }
 
-{$ifdef SYS_IR4}
 {$l agon_p.ir4}
-{$endif}
 {$i err_asm.inc}
-{$ifndef SYS_IR4}
-{$l mcposcli.asm}
-{$endif}
 
 var
   Dummy: Char;
 
-{$ifdef SYS_IR4}
 function McpOscli(CmdAddr: Integer): Byte; external 'pas_mos_oscli';
-{$else}
-function McpOscli(CmdAddr: Integer): Byte; register; external '__mcp_oscli';
-{$endif}
 
-procedure McpExec(Command, Params: TStr80);
+procedure McpExec(Command: TStr16; var Params: String);
 var
-  Temp: String;
+  CmdBuf: String;
+  L: Integer;
 begin
-  if Params = '' then
-    Temp := Command + #00
-  else
-    Temp := Command + ' ' + Params + #00;
-  DosExitCode := McpOscli(Addr(Temp) + 1);
+  CmdBuf := Command;
+  if Length(Params) > 0 then
+  begin
+    AppendLit(CmdBuf, ' ');
+    AppendVar(CmdBuf, Params);
+  end;
+  L := Length(CmdBuf);
+  if L = 255 then L := 254;
+  CmdBuf[L + 1] := #0;
+  DosExitCode := McpOscli(Addr(CmdBuf) + 1);
 end;
 
-procedure RunBin(Path, Fallback, Params: TStr80);
+procedure RunBin(var Path: String; Fallback: TStr16; var Params: String);
+var
+  Arg: String;
 begin
-  McpExec('load', Path + ' 0x40000');
+  Arg := Path;
+  AppendLit(Arg, ' 0x40000');
+  McpExec('load', Arg);
   if (DosExitCode <> 0) and (Fallback <> '') then
-    McpExec('load', Fallback + ' 0x40000');
+  begin
+    Arg := Fallback;
+    AppendLit(Arg, ' 0x40000');
+    McpExec('load', Arg);
+  end;
   if DosExitCode <> 0 then Exit;
 
-  if Params <> '' then
-    McpExec('run', '0x40000 ' + Params)
-  else
-    McpExec('run', '0x40000');
+  Arg := '0x40000';
+  if Length(Params) > 0 then
+  begin
+    AppendLit(Arg, ' ');
+    AppendVar(Arg, Params);
+  end;
+  McpExec('run', Arg);
 end;
 
-function HasExt(Name, Ext: TStr80): Boolean;
+function HasExt(var Name: String; Ext: TStr16): Boolean;
 var
   I, LName, LExt: Integer;
   C1, C2: Char;
@@ -68,41 +76,52 @@ begin
   HasExt := True;
 end;
 
-function ReplaceExt(Name, NewExt: TStr80): TStr80;
+procedure ReplaceExt(var Name: String; NewExt: TStr16; var OutName: String);
 var
   I: Integer;
 begin
   I := Length(Name);
   while (I > 0) and (Name[I] <> '.') and (Name[I] <> '/') do
     Dec(I);
+  OutName := Name;
   if (I > 0) and (Name[I] = '.') then
-    ReplaceExt := Copy(Name, 1, I - 1) + NewExt
-  else
-    ReplaceExt := Name + NewExt;
+    SetLength(OutName, I - 1);
+  AppendLit(OutName, NewExt);
 end;
 
-procedure RunTool(Name, Params: TStr80);
+procedure RunTool(Name: TStr16; var Params: String);
+var
+  Path: String;
 begin
-  RunBin('/bin/' + Name, Name, Params);
+  Path := '/bin/';
+  AppendLit(Path, Name);
+  RunBin(Path, Name, Params);
 end;
 
-function RunIr4c(InFile: TStr80): Boolean;
+function RunIr4c(var InFile: String): Boolean;
+var
+  Params: String;
 begin
   WriteLn('Compiling ', InFile, ' -> ', OutBin, '...');
-  RunTool('ir4c.bin', '-t agon -I /pasta84/rtl -I /lib -o ' + OutBin + ' ' + InFile);
+  Params := '-t agon -I /pasta84/rtl -I /lib -o ';
+  AppendVar(Params, OutBin);
+  AppendLit(Params, ' ');
+  AppendVar(Params, InFile);
+  RunTool('ir4c.bin', Params);
   RunIr4c := (DosExitCode = 0) and FileExists(OutBin);
 end;
 
 procedure RunIdeLoop;
 var
   BinOk: Boolean;
-  ErrEntry: String;
-  Ir4File: TStr80;
+  ErrEntry, Ir4File, Params: String;
 begin
   if ParamCount >= 1 then
     SrcFile := ParamStr(1)
   else
-    SrcFile := '';
+    SetLength(SrcFile, 0);
+
+  WriteLn('Loading pano...');
 
   while True do
   begin
@@ -117,13 +136,15 @@ begin
       Break;
 
     Write(#12);
+    WriteLn('I wish I could get eZ80 support in Spectrum Next for Christmas...');
+    WriteLn;
     DeleteIfExists(OutBin);
     DeleteIfExists(ErrFile);
     WriteLn('Building ', SrcFile, '...');
 
     if HasExt(SrcFile, '.pas') then
     begin
-      Ir4File := ReplaceExt(SrcFile, '.ir4');
+      ReplaceExt(SrcFile, '.ir4', Ir4File);
       DeleteIfExists(Ir4File);
       RunTool('pasta84.bin', SrcFile);
       BinOk := (DosExitCode = 0) and FileExists(Ir4File);
@@ -136,7 +157,11 @@ begin
     end
     else
     begin
-      RunTool('ez80asm.bin', SrcFile + ' ' + OutBin + ' -c');
+      Params := SrcFile;
+      AppendLit(Params, ' ');
+      AppendVar(Params, OutBin);
+      AppendLit(Params, ' -c');
+      RunTool('ez80asm.bin', Params);
       BinOk := (DosExitCode = 0) and FileExists(OutBin);
     end;
 
@@ -147,20 +172,24 @@ begin
       begin
         WriteLn;
         WriteLn('Running ', OutBin, '...');
-        RunBin(OutBin, '', '');
+        SetLength(Params, 0);
+        RunBin(OutBin, '', Params);
         WriteLn;
         Write('Press any key to return to pano...');
         Dummy := ReadKey;
-      end;
+        WriteLn(' Returning to pano...');
+      end
+      else
+        WriteLn('Returning to pano...');
     end
     else
     begin
       CaptureAsmErrors(ErrEntry);
-      if ErrEntry <> '' then
+      if Length(ErrEntry) > 0 then
         WriteErrorFile(ErrEntry);
       WriteResult('ERR');
       WriteLn;
-      WriteLn('Assembly failed.');
+      WriteLn('Build failed. Returning to pano...');
     end;
   end;
 end;

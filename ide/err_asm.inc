@@ -1,26 +1,21 @@
-{ err_asm.inc - Scan ez80asm console output via VDP and format standardized error lines }
+{ err_asm.inc - Scan compiler/assembler console output via VDP and format error lines }
 
-{$ifdef SYS_IR4}
 function ScrChar(X, Y: Integer): Char; external 'pas_scrchar';
-{$else}
-{$l scrchar.asm}
-
-function ScrChar(X, Y: Integer): Char; register; external '__scrchar';
-{$endif}
 
 procedure ReadScreenRow(Row, MaxCols: Integer; var S: String);
 var
-  Col, Spaces: Integer;
+  Col, Spaces, Len, LastNonSpace: Integer;
   Ch: Char;
 begin
   Ch := ScrChar(0, Row);
   if (Ch = ' ') or (Ch = #0) then
   begin
-    S := '';
+    SetLength(S, 0);
     Exit;
   end;
 
-  S := '';
+  Len := 0;
+  LastNonSpace := 0;
   Spaces := 0;
   for Col := 0 to MaxCols - 1 do
   begin
@@ -33,92 +28,112 @@ begin
     end
     else
       Spaces := 0;
-    if Length(S) < 80 then
-      S := S + Ch;
+    if Len < 80 then
+    begin
+      Inc(Len);
+      S[Len] := Ch;
+      if Ch <> ' ' then
+        LastNonSpace := Len;
+    end;
   end;
-
-  while (Length(S) > 0) and (S[Length(S)] = ' ') do
-    Delete(S, Length(S), 1);
+  SetLength(S, LastNonSpace);
 end;
 
 function FormatEz80AsmError(var LineStr: String; var OutErr: String): Boolean;
 var
-  P, Q, LineNumEnd: Integer;
-  ErrFile, LineNumS, ErrMsg: String;
+  P, Q, FileEnd, LineStart, LineLen, MsgStart: Integer;
 begin
   FormatEz80AsmError := False;
-  OutErr := '';
-  ErrFile := '';
+  SetLength(OutErr, 0);
 
   { PASTA/84 native format: *** Error at <file>(<line>,<col>): <msg> or *** Error: <msg> }
-  if (Copy(LineStr, 1, 13) = '*** Error at ') or
-     (Copy(LineStr, 1, 11) = '*** Error: ') then
+  if (Pos('*** Error at ', LineStr) = 1) or
+     (Pos('*** Error: ', LineStr) = 1) then
   begin
     OutErr := LineStr;
     FormatEz80AsmError := True;
     Exit;
   end;
 
-  { ir4c format: <file>:<line>: error: <msg> or error: <msg> }
-  if Copy(LineStr, 1, 7) = 'error: ' then
+  { ir4c format: error: <msg> or ir4c: <msg> }
+  if Pos('error: ', LineStr) = 1 then
   begin
-    OutErr := '*** Error: ' + Copy(LineStr, 8, 255);
+    OutErr := '*** Error: ';
+    AppendSub(OutErr, LineStr, 8, 255);
     FormatEz80AsmError := True;
     Exit;
   end;
+  if Pos('ir4c: ', LineStr) = 1 then
+  begin
+    OutErr := '*** Error: ';
+    AppendSub(OutErr, LineStr, 7, 255);
+    FormatEz80AsmError := True;
+    Exit;
+  end;
+
+  { ir4c location format: <file>:<line>: error: <msg> }
   P := Pos(': error: ', LineStr);
   if P > 0 then
   begin
-    ErrMsg := Copy(LineStr, P + 9, 255);
-    ErrFile := Copy(LineStr, 1, P - 1);
-    Q := Length(ErrFile);
-    while (Q > 0) and (ErrFile[Q] >= '0') and (ErrFile[Q] <= '9') do
+    Q := P - 1;
+    while (Q > 0) and (LineStr[Q] >= '0') and (LineStr[Q] <= '9') do
       Dec(Q);
-    if (Q > 1) and (Q < Length(ErrFile)) and (ErrFile[Q] = ':') then
+    if (Q > 1) and (Q < P - 1) and (LineStr[Q] = ':') then
     begin
-      LineNumS := Copy(ErrFile, Q + 1, 255);
-      ErrFile := Copy(ErrFile, 1, Q - 1);
+      OutErr := '*** Error at ';
+      AppendSub(OutErr, LineStr, 1, Q - 1);
+      AppendLit(OutErr, '(');
+      AppendSub(OutErr, LineStr, Q + 1, P - 1 - Q);
+      AppendLit(OutErr, ',1): ');
+      AppendSub(OutErr, LineStr, P + 9, 255);
     end
     else
-      ErrFile := '';
-  end
-  { Expected ez80asm format: File "<name>" line <num> - <msg> }
-  else if Copy(LineStr, 1, 6) = 'File "' then
-  begin
-    Delete(LineStr, 1, 6);
-    Q := Pos('"', LineStr);
-    if Q = 0 then Exit;
-    ErrFile := Copy(LineStr, 1, Q - 1);
-    Delete(LineStr, 1, Q);
-
-    P := Pos('line ', LineStr);
-    if P = 0 then Exit;
-    Delete(LineStr, 1, P + 4);
-
-    LineNumEnd := 1;
-    while (LineNumEnd <= Length(LineStr)) and
-          (LineStr[LineNumEnd] >= '0') and (LineStr[LineNumEnd] <= '9') do
-      Inc(LineNumEnd);
-    if LineNumEnd = 1 then Exit;
-    LineNumS := Copy(LineStr, 1, LineNumEnd - 1);
-
-    P := Pos(' - ', LineStr);
-    if P > 0 then
-      ErrMsg := Copy(LineStr, P + 3, 255)
-    else
-      ErrMsg := Copy(LineStr, LineNumEnd, 255);
-  end;
-
-  if ErrFile <> '' then
-  begin
-    OutErr := '*** Error at ' + ErrFile + '(' + LineNumS + ',1): ' + ErrMsg;
+    begin
+      OutErr := '*** Error: ';
+      AppendSub(OutErr, LineStr, P + 9, 255);
+    end;
     FormatEz80AsmError := True;
     Exit;
   end;
 
-  if Copy(LineStr, 1, 5) = 'Error' then
+  { Expected ez80asm format: File "<name>" line <num> - <msg> }
+  if Pos('File "', LineStr) = 1 then
   begin
-    OutErr := '*** Error: ' + LineStr;
+    FileEnd := 7;
+    while (FileEnd <= Length(LineStr)) and (LineStr[FileEnd] <> '"') do
+      Inc(FileEnd);
+    if FileEnd > Length(LineStr) then Exit;
+
+    P := Pos('line ', LineStr);
+    if P <= FileEnd then Exit;
+    LineStart := P + 5;
+    LineLen := 0;
+    while (LineStart + LineLen <= Length(LineStr)) and
+          (LineStr[LineStart + LineLen] >= '0') and
+          (LineStr[LineStart + LineLen] <= '9') do
+      Inc(LineLen);
+    if LineLen = 0 then Exit;
+
+    P := Pos(' - ', LineStr);
+    if P >= LineStart + LineLen then
+      MsgStart := P + 3
+    else
+      MsgStart := LineStart + LineLen;
+
+    OutErr := '*** Error at ';
+    AppendSub(OutErr, LineStr, 7, FileEnd - 7);
+    AppendLit(OutErr, '(');
+    AppendSub(OutErr, LineStr, LineStart, LineLen);
+    AppendLit(OutErr, ',1): ');
+    AppendSub(OutErr, LineStr, MsgStart, 255);
+    FormatEz80AsmError := True;
+    Exit;
+  end;
+
+  if Pos('Error', LineStr) = 1 then
+  begin
+    OutErr := '*** Error: ';
+    AppendVar(OutErr, LineStr);
     FormatEz80AsmError := True;
   end;
 end;
@@ -128,8 +143,8 @@ var
   Row, LastRow: Integer;
   LineStr, Parsed, Fallback: String;
 begin
-  ErrEntry := '';
-  Fallback := '';
+  SetLength(ErrEntry, 0);
+  SetLength(Fallback, 0);
   LastRow := WhereY - 1;
   if LastRow < 0 then Exit;
   if LastRow > 59 then LastRow := 59;
@@ -137,16 +152,16 @@ begin
   for Row := LastRow downto 0 do
   begin
     ReadScreenRow(Row, 80, LineStr);
-    if LineStr <> '' then
+    if Length(LineStr) > 0 then
     begin
       if FormatEz80AsmError(LineStr, Parsed) then
       begin
-        if Copy(Parsed, 1, 13) = '*** Error at ' then
+        if Pos('*** Error at ', Parsed) = 1 then
         begin
           ErrEntry := Parsed;
           Exit;
         end
-        else if Fallback = '' then
+        else if Length(Fallback) = 0 then
           Fallback := Parsed;
       end;
     end;
