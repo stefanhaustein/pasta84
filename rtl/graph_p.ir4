@@ -1,11 +1,14 @@
 \ graph_p.ir4 - PASTA/84 graphics runtime (Plot, Point, Draw, Circle, FloodFill, gfxtext hooks)
 
 require "graphics.ir4"
+require "sprite.ir4"
+require "sound.ir4"
 require "crt_p.ir4"
 
 var __pas_gfx_bg_native :i
 var __pas_gfx_curx :i
 var __pas_gfx_cury :i
+var __pas_spr_pal :bytes 16
 
 fn __pas_rgb ( c :i -> :i )
   0 -> var r :i
@@ -47,15 +50,19 @@ fn __pas_gfx_prints ( s :a )
   s u8@ +-> __pas_txt_x
 end
 
-fn __pas_gfx_ensure ( )
+fn __pas_gfx_init ( w :i h :i bpp :i )
   __pas_gfx_active 0 <> if return then
   & __pas_gfx_clrscr -> __pas_gfx_clrscr_fn
   & __pas_gfx_fg -> __pas_gfx_fg_fn
   & __pas_gfx_outc -> __pas_gfx_outc_fn
   & __pas_gfx_prints -> __pas_gfx_prints_fn
   1 -> __pas_gfx_active
-  256 176 4 gfxinit
+  w h bpp gfxinit
   __pas_gfx_clrscr
+end
+
+fn __pas_gfx_ensure ( )
+  256 176 4 __pas_gfx_init
 end
 
 fn pas_setcolor ( c :i )
@@ -75,7 +82,7 @@ fn pas_setgraphmode ( m :i )
     then
     return
   then
-  __pas_gfx_ensure
+  m 2 = if 320 240 6 __pas_gfx_init else __pas_gfx_ensure then
 end
 
 fn pas_border ( c :i )
@@ -113,4 +120,26 @@ fn pas_point ( x :i y :i -> :i )
   x y gfxgetpx -> var c :i
   c 0 < if 0 return then
   c __pas_gfx_bg_native <> if 1 else 0 then
+end
+
+fn pas_spr_count ( -> :i ) sprcount end
+fn pas_spr_maxw ( -> :i ) sprmaxw end
+fn pas_spr_maxh ( -> :i ) sprmaxh end
+
+fn pas_spr_define ( img :i w :i h :i data :a pal :a ncolors :i -> :i )
+  ncolors 16 > if 16 -> ncolors then
+  0 -> var i :i
+  begin i ncolors < while
+    pal i a+ u8@ __pas_rgb __pas_spr_pal i a+ i8!
+    1 +-> i
+  repeat
+  img w h data __pas_spr_pal ncolors sprimg
+end
+
+fn pas_sound ( freq :i )
+  freq 0 <= if 0 sfxstop else 0 freq 12 0 0 sfxplay then
+end
+
+fn pas_nosound ( )
+  0 sfxstop
 end

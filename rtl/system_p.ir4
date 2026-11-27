@@ -127,6 +127,7 @@ end
 
 fn pas_halt ( code :i )
   code -> __exitcode
+  code sysexit
 end
 
 fn pas_assert ( cond :i file :a line :i )

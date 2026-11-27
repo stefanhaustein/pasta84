@@ -76,6 +76,23 @@ procedure FloodFill(X, Y: Integer); external 'pas_floodfill';
 procedure SetColor(Color: Integer); external 'pas_setcolor';
 procedure SetGraphMode(Mode: Integer); external 'pas_setgraphmode';
 procedure Border(Color: Integer); external 'pas_border';
+function GraphWidth: Integer; external 'gfxwidth';
+function GraphHeight: Integer; external 'gfxheight';
+procedure WaitVSync; external 'gfxvsync';
+
+function SpriteCount: Integer; external 'pas_spr_count';
+function SpriteMaxWidth: Integer; external 'pas_spr_maxw';
+function SpriteMaxHeight: Integer; external 'pas_spr_maxh';
+function DefineSprite(Img, W, H: Integer; var Data; var Pal; NColors: Integer): Boolean; external 'pas_spr_define';
+procedure SetSprite(Id, Img: Integer); external 'sprset';
+procedure MoveSprite(Id, X, Y: Integer); external 'sprpos';
+procedure ShowSprite(Id: Integer; Visible: Boolean); external 'sprshow';
+
+procedure Sound(Freq: Integer); external 'pas_sound';
+procedure NoSound; external 'pas_nosound';
+procedure SfxPlay(Ch, Freq, Vol, Wave, DurMs: Integer); external 'sfxplay';
+procedure SfxStop(Ch: Integer); external 'sfxstop';
+procedure SfxTick; external 'sfxtick';
 
 function Length(S: String): Integer; external 'pas_strlen';
 function Copy(S: String; Start, Count: Integer): String; external 'pas_copy';
